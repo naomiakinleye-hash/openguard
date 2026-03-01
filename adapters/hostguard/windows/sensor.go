@@ -14,15 +14,19 @@ import (
 )
 
 // WindowsSensor is the Windows implementation of the HostGuard Sensor interface.
-// It aggregates ProcessMonitor, SchedulerMonitor, and RegistryMonitor.
+// It aggregates ProcessMonitor (or ETWProcessMonitor), SchedulerMonitor,
+// RegistryMonitor, NetworkMonitor, and ServicesMonitor.
 type WindowsSensor struct {
 	cfg       common.Config
 	publisher *common.Publisher
 	logger    *zap.Logger
 	eventCh   chan *common.HostEvent
 	process   *ProcessMonitor
+	etwProc   *ETWProcessMonitor
 	scheduler *SchedulerMonitor
 	registry  *RegistryMonitor
+	network   *NetworkMonitor
+	services  *ServicesMonitor
 	wg        sync.WaitGroup
 	cancelFn  context.CancelFunc
 }
@@ -42,8 +46,11 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 		eventCh:   eventCh,
 	}
 	s.process = newProcessMonitor(cfg, eventCh, logger)
+	s.etwProc = newETWProcessMonitor(cfg, eventCh, logger)
 	s.scheduler = newSchedulerMonitor(cfg, eventCh, logger)
 	s.registry = newRegistryMonitor(cfg, eventCh, logger)
+	s.network = newNetworkMonitor(cfg, eventCh, logger)
+	s.services = newServicesMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -52,15 +59,29 @@ func (s *WindowsSensor) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 
-	if err := s.process.Start(ctx); err != nil {
-		cancel()
-		return fmt.Errorf("windows sensor: start process monitor: %w", err)
+	// Try ETW first; fall back to polling if unavailable (e.g. non-Administrator).
+	if err := s.etwProc.Start(ctx); err != nil {
+		s.logger.Warn("hostguard: ETW unavailable, using polling (run as Administrator for real-time coverage)",
+			zap.Error(err))
+		if err := s.process.Start(ctx); err != nil {
+			cancel()
+			return fmt.Errorf("windows sensor: start process monitor: %w", err)
+		}
+	} else {
+		s.logger.Info("hostguard: using ETW real-time process monitoring")
 	}
+
 	if err := s.scheduler.Start(ctx); err != nil {
 		s.logger.Warn("windows sensor: start scheduler monitor", zap.Error(err))
 	}
 	if err := s.registry.Start(ctx); err != nil {
 		s.logger.Warn("windows sensor: start registry monitor", zap.Error(err))
+	}
+	if err := s.network.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start network monitor", zap.Error(err))
+	}
+	if err := s.services.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start services monitor", zap.Error(err))
 	}
 
 	s.wg.Add(1)
@@ -75,9 +96,12 @@ func (s *WindowsSensor) Stop() error {
 	if s.cancelFn != nil {
 		s.cancelFn()
 	}
+	s.etwProc.Stop()
 	s.process.Stop()
 	s.scheduler.Stop()
 	s.registry.Stop()
+	s.network.Stop()
+	s.services.Stop()
 	s.wg.Wait()
 	s.logger.Info("windows sensor: stopped")
 	return nil

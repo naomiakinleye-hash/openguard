@@ -14,7 +14,7 @@ import (
 )
 
 // DarwinSensor is the macOS implementation of the HostGuard Sensor interface.
-// It aggregates ProcessMonitor, LaunchdMonitor, and LoginItemsMonitor.
+// It aggregates ProcessMonitor, LaunchdMonitor, LoginItemsMonitor, and NetworkMonitor.
 type DarwinSensor struct {
 	cfg        common.Config
 	publisher  *common.Publisher
@@ -23,6 +23,7 @@ type DarwinSensor struct {
 	process    *ProcessMonitor
 	launchd    *LaunchdMonitor
 	loginItems *LoginItemsMonitor
+	network    *NetworkMonitor
 	wg         sync.WaitGroup
 	cancelFn   context.CancelFunc
 }
@@ -44,6 +45,7 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.process = newProcessMonitor(cfg, eventCh, logger)
 	s.launchd = newLaunchdMonitor(cfg, eventCh, logger)
 	s.loginItems = newLoginItemsMonitor(cfg, eventCh, logger)
+	s.network = newNetworkMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -62,6 +64,9 @@ func (s *DarwinSensor) Start(ctx context.Context) error {
 	if err := s.loginItems.Start(ctx); err != nil {
 		s.logger.Warn("darwin sensor: start login items monitor", zap.Error(err))
 	}
+	if err := s.network.Start(ctx); err != nil {
+		s.logger.Warn("darwin sensor: start network monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -78,6 +83,7 @@ func (s *DarwinSensor) Stop() error {
 	s.process.Stop()
 	s.launchd.Stop()
 	s.loginItems.Stop()
+	s.network.Stop()
 	s.wg.Wait()
 	s.logger.Info("darwin sensor: stopped")
 	return nil

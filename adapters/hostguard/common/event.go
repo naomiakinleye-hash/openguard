@@ -143,6 +143,12 @@ func (e *HostEvent) ToUnifiedEvent() ([]byte, error) {
 
 // classifyEvent assigns severity, risk_score, and tier based on event type and indicators.
 func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier string) {
+	// critical_service_stopped indicator always maps to T3.
+	for _, ind := range e.Indicators {
+		if ind == "critical_service_stopped" {
+			return "critical", 95.0, "T3"
+		}
+	}
 	switch e.EventType {
 	case "privilege_escalation":
 		return "high", 80.0, "T3"
@@ -154,6 +160,10 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 		return "medium", 40.0, "T1"
 	case "process_created", "process_terminated":
 		return "info", 10.0, "T0"
+	case "connection_established", "connection_closed":
+		return "info", 10.0, "T0"
+	case "suspicious_connection", "high_volume_connection":
+		return "high", 70.0, "T2"
 	default:
 		return "low", 20.0, "T1"
 	}

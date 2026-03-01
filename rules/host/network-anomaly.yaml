@@ -1,0 +1,39 @@
+id: host.network_anomaly
+name: Network Anomaly Detection
+version: "1.0"
+description: Detects suspicious outbound connections, C2 beaconing patterns, and unexpected network activity by processes.
+domain: host
+severity: high
+tier: T2
+enabled: true
+
+conditions:
+  any:
+    - field: indicators
+      contains: "suspicious_remote_port"
+    - field: indicators
+      contains: "unexpected_http_connection"
+    - field: indicators
+      contains: "high_volume_connection"
+    - field: indicators
+      contains: "known_malicious_process_network"
+    - field: indicators
+      contains: "suspicious_path_network"
+    - field: indicators
+      contains: "headless_process_network"
+    - field: indicators
+      contains: "server_unexpected_outbound"
+    - field: indicators
+      contains: "deleted_binary_network"
+
+response:
+  tier: T2
+  actions:
+    - type: alert
+      target: security_team
+    - type: hold
+      description: "Block network connection pending human review"
+
+policy_refs:
+  - constitution.safety_over_autonomy
+  - openguard-v5.require_approval.bulk_outbound

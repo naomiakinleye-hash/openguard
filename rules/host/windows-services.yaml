@@ -1,0 +1,38 @@
+id: host.windows_service_anomaly
+name: Windows Service Anomaly Detection
+version: "1.0"
+description: Detects new, modified, or suspicious Windows service registrations including driver installs and SCM abuse.
+domain: host
+severity: high
+tier: T2
+enabled: true
+
+conditions:
+  any:
+    - field: indicators
+      contains: "service_suspicious_path"
+    - field: indicators
+      contains: "service_unquoted_path"
+    - field: indicators
+      contains: "service_localsystem_no_description"
+    - field: indicators
+      contains: "service_new_driver"
+    - field: indicators
+      contains: "service_interactive"
+    - field: event_type
+      equals: "startup_item_added"
+      and:
+        - field: metadata.startup_item_type
+          equals: "windows_service"
+
+response:
+  tier: T2
+  actions:
+    - type: alert
+      target: security_team
+    - type: hold
+      description: "Hold service start pending review"
+
+policy_refs:
+  - constitution.safety_over_autonomy
+  - openguard-v5.require_approval.process_termination

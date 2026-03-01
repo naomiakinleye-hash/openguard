@@ -1,0 +1,26 @@
+id: host.critical_service_stopped
+name: Critical System Service Stopped
+version: "1.0"
+description: Detects unexpected termination of critical Windows system services (lsass, wininit, csrss, etc.).
+domain: host
+severity: critical
+tier: T3
+enabled: true
+
+conditions:
+  any:
+    - field: indicators
+      contains: "critical_service_stopped"
+
+response:
+  tier: T3
+  actions:
+    - type: alert
+      target: security_team
+      priority: critical
+    - type: contain
+      description: "Immediate investigation required — critical system service stopped"
+
+policy_refs:
+  - constitution.safety_over_autonomy
+  - openguard-v5.always_block.unapproved_privilege_escalation
