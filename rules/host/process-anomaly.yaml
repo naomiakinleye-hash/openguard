@@ -1,0 +1,49 @@
+id: HOST-001
+name: process-anomaly
+version: "1.0"
+domain: host
+description: >
+  Detects unusual process behaviour including unexpected parent-child relationships,
+  execution from non-standard binary paths, and abnormal resource consumption.
+
+conditions:
+  - id: COND-001
+    description: Unusual parent-child process relationship
+    field: process.parent_name
+    operator: not_in
+    value: ["systemd", "init", "sshd", "bash", "sh", "zsh"]
+
+  - id: COND-002
+    description: Binary executed from unexpected path
+    field: process.binary_path
+    operator: not_starts_with
+    value: ["/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin"]
+
+  - id: COND-003
+    description: High CPU usage by unknown process
+    field: process.cpu_percent
+    operator: greater_than
+    value: 80
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: low
+    tier: T1
+  - conditions_matched: 2
+    severity: medium
+    tier: T2
+  - conditions_matched: 3
+    severity: high
+    tier: T3
+
+response:
+  t1:
+    - action: alert
+      target: on-call-channel
+  t2:
+    - action: hold
+    - action: request_approval
+  t3:
+    - action: isolate_process
+    - action: alert
+      target: security-team

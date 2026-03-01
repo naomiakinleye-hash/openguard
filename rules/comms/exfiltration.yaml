@@ -1,0 +1,57 @@
+id: COMMS-002
+name: exfiltration
+version: "1.0"
+domain: comms
+description: >
+  Detects data exfiltration patterns in communication channels: large file
+  transfers, encoded payloads, and mass recipient outbound with sensitive content.
+
+conditions:
+  - id: COND-001
+    description: Attachment size exceeds threshold for the channel
+    field: message.attachment_size_bytes
+    operator: greater_than
+    value: 10485760
+
+  - id: COND-002
+    description: Message body contains Base64 or hex-encoded block
+    field: message.body
+    operator: regex_match
+    value: "([A-Za-z0-9+/]{100,}={0,2}|[0-9a-fA-F]{100,})"
+
+  - id: COND-003
+    description: Outbound message to more than 50 recipients
+    field: message.recipient_count
+    operator: greater_than
+    value: 50
+
+  - id: COND-004
+    description: Message contains content classified as sensitive/secret
+    field: message.data_classification
+    operator: in
+    value: ["sensitive", "secret", "confidential"]
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: low
+    tier: T1
+  - conditions_matched: 2
+    severity: high
+    tier: T3
+  - conditions_matched: 3
+    severity: critical
+    tier: T4
+
+response:
+  t1:
+    - action: alert
+      target: on-call-channel
+  t3:
+    - action: block_message
+    - action: isolate_sender_account
+    - action: alert
+      target: security-team
+  t4:
+    - action: emergency_lockdown
+    - action: alert
+      target: ciso

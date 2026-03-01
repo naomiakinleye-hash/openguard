@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openguard.dshub.io/schemas/unified-event.schema.json",
+  "title": "UnifiedEvent",
+  "description": "Canonical security event schema for OpenGuard v5",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "source",
+    "domain",
+    "severity",
+    "risk_score",
+    "tier",
+    "actor",
+    "target",
+    "indicators",
+    "policy_citations",
+    "human_approved",
+    "audit_hash"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event identifier (UUID v4)"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the event was observed"
+    },
+    "source": {
+      "type": "object",
+      "required": ["type", "adapter"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Source category (e.g. host, whatsapp, telegram, twilio)"
+        },
+        "adapter": {
+          "type": "string",
+          "description": "Adapter identifier that produced the event"
+        },
+        "host_id": {
+          "type": "string",
+          "description": "Identifier of the originating host (optional)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "domain": {
+      "type": "string",
+      "enum": ["host", "comms", "agent", "model"],
+      "description": "Functional domain that classified this event"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"],
+      "description": "Severity label assigned by the detection engine"
+    },
+    "risk_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Composite risk score R = anomaly + policy_violation + threat_intel + asset_criticality"
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["T0", "T1", "T2", "T3", "T4"],
+      "description": "Response tier derived from risk_score"
+    },
+    "actor": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "description": "human, process, agent, model"},
+        "ip": {"type": "string", "format": "ipv4"},
+        "user_agent": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "resource": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "indicators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "value", "confidence"],
+        "properties": {
+          "type": {"type": "string"},
+          "value": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "policy_citations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Policy rule IDs that contributed to this event's classification"
+    },
+    "model_assessments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["model", "confidence", "recommendation"],
+        "properties": {
+          "model": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "recommendation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "blast_radius": {
+      "type": "object",
+      "properties": {
+        "estimate": {"type": "string"},
+        "affected_resources": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "rollback_plan": {
+      "type": "string",
+      "description": "Human-readable rollback instructions for T3/T4 actions"
+    },
+    "human_approved": {
+      "type": "boolean",
+      "description": "Whether a human operator has explicitly approved the associated action"
+    },
+    "audit_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the canonical event payload for tamper detection"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Arbitrary adapter-specific metadata"
+    }
+  },
+  "additionalProperties": false
+}

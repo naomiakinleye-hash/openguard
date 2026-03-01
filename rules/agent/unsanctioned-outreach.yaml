@@ -1,0 +1,59 @@
+id: AGENT-001
+name: unsanctioned-outreach
+version: "1.0"
+domain: agent
+description: >
+  Detects AI agents attempting unauthorized external communication: outbound
+  requests to domains not on the approved list, attempts to send messages
+  through unapproved channels, or attempts to exfiltrate data outside
+  sanctioned tool calls.
+
+conditions:
+  - id: COND-001
+    description: Agent initiated outbound HTTP/S request to non-allowlisted domain
+    field: agent.outbound_request.domain
+    operator: not_in_allowlist
+    value: agent.approved_domains
+
+  - id: COND-002
+    description: Agent invoked tool not in its approved tool list
+    field: agent.tool_invocation.tool_name
+    operator: not_in_field
+    value: agent.approved_tools
+
+  - id: COND-003
+    description: Agent attempted to send message via communication adapter directly
+    field: agent.action_type
+    operator: in
+    value: ["send_whatsapp", "send_telegram", "send_sms", "send_email_direct"]
+
+  - id: COND-004
+    description: Agent action not matched by any policy allow rule
+    field: agent.action_policy_match
+    operator: equals
+    value: none
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: medium
+    tier: T2
+  - conditions_matched: 2
+    severity: high
+    tier: T3
+  - conditions_matched: 3
+    severity: critical
+    tier: T4
+
+response:
+  t2:
+    - action: block_action
+    - action: request_approval
+  t3:
+    - action: block_action
+    - action: suspend_agent
+    - action: alert
+      target: security-team
+  t4:
+    - action: emergency_lockdown
+    - action: alert
+      target: ciso

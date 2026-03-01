@@ -1,0 +1,105 @@
+# OpenGuard v5 Baseline Policy
+# Evaluated AFTER constitutional rules.
+
+version: "1.0"
+last_modified: "2025-01-01T00:00:00Z"
+
+always_block:
+  - id: B-BLOCK-001
+    description: Prevent any agent or service from modifying operational policies at runtime
+    conditions:
+      - target_type: policy_file
+      - operation: write
+    action: block
+    policy_ref: C-008
+
+  - id: B-BLOCK-002
+    description: Prevent disabling or bypassing logging and audit subsystems
+    conditions:
+      - target_type: logging_subsystem
+      - operation: disable
+    action: block
+    policy_ref: C-004
+
+  - id: B-BLOCK-003
+    description: Prevent outbound transmission of secrets, credentials, or API keys
+    conditions:
+      - data_classification: secret
+      - direction: outbound
+    action: block
+    policy_ref: C-001
+
+  - id: B-BLOCK-004
+    description: Prevent unapproved privilege escalation attempts
+    conditions:
+      - operation: privilege_escalation
+      - human_approved: false
+    action: block
+    policy_ref: C-002
+
+require_approval:
+  - id: B-APPROVE-001
+    description: Bulk outbound communication exceeding 100 recipients requires operator approval
+    conditions:
+      - operation: outbound_comms
+      - recipient_count: ">100"
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-002
+    description: First-time recipient combined with attachment requires approval
+    conditions:
+      - recipient_known: false
+      - has_attachment: true
+    action: require_approval
+    policy_ref: C-001
+
+  - id: B-APPROVE-003
+    description: Token or credential revocation requires operator approval
+    conditions:
+      - operation: token_revocation
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-004
+    description: Process termination on critical services requires operator approval
+    conditions:
+      - operation: process_terminate
+      - asset_criticality: critical
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-005
+    description: Emergency lockdown activation requires operator approval (except pre-authorized T4)
+    conditions:
+      - operation: emergency_lockdown
+      - tier: ["T0", "T1", "T2", "T3"]
+    action: require_approval
+    policy_ref: C-003
+
+auto_allow:
+  - id: B-ALLOW-001
+    description: Signed template communications to allowlisted recipients are auto-allowed
+    conditions:
+      - message_signed: true
+      - template: true
+      - recipient_allowlisted: true
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-002
+    description: Allowlisted recipient low-risk workflows within quota are auto-allowed
+    conditions:
+      - risk_score: "<20"
+      - recipient_allowlisted: true
+      - within_quota: true
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-003
+    description: Read-only operations on non-sensitive resources are auto-allowed
+    conditions:
+      - operation: read
+      - data_classification: ["public", "internal"]
+    action: allow
+    policy_ref: C-006

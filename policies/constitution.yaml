@@ -1,0 +1,89 @@
+# OpenGuard v5 Constitutional Policy
+# These 10 principles are ALWAYS evaluated first, before any baseline policy.
+# Hard-enforcement rules cannot be overridden at runtime.
+
+version: "1.0"
+last_modified: "2025-01-01T00:00:00Z"
+immutable: true
+
+principles:
+  - id: C-001
+    name: safety-over-autonomy
+    description: >
+      Safety constraints always take precedence over autonomous AI or automated
+      system decisions. Any proposed action that conflicts with a safety constraint
+      is blocked unconditionally.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-002
+    name: least-privilege-by-default
+    description: >
+      Every process, agent, and service operates with the minimum permissions
+      required to perform its function. Excess permissions are denied.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-003
+    name: human-override-always
+    description: >
+      A human operator must always be able to pause, stop, or audit any automated
+      action. This capability must remain available even in degraded mode.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-004
+    name: no-stealth-actions
+    description: >
+      Every action taken by the platform is recorded in the tamper-evident audit
+      ledger. No action may be taken without a corresponding audit entry.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-005
+    name: privacy-first
+    description: >
+      The platform collects metadata in preference to content. Content access
+      requires explicit justification and is always logged.
+    enforcement_level: soft
+    violation_action: alert
+
+  - id: C-006
+    name: policy-bound-execution
+    description: >
+      All actions must be explicitly permitted by policy (deny/ask/allow).
+      Ad-hoc or undeclared actions are denied by default.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-007
+    name: fail-safe-on-uncertainty
+    description: >
+      When the system cannot determine with sufficient confidence whether an
+      action is safe, it defaults to blocking and requesting human review.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-008
+    name: no-self-policy-modification
+    description: >
+      No agent, service, or model may modify the constitutional or baseline
+      policies at runtime. Policy changes require a human-initiated deployment.
+    enforcement_level: hard
+    violation_action: block
+
+  - id: C-009
+    name: defense-in-depth
+    description: >
+      Multiple independent control layers protect against single points of failure.
+      No single compromised layer should allow a harmful action to proceed.
+    enforcement_level: soft
+    violation_action: alert
+
+  - id: C-010
+    name: explainability
+    description: >
+      All Tier 2 and above decisions must include: evidence summary, confidence
+      score, policy citations, blast-radius estimate, and rollback plan.
+    enforcement_level: hard
+    violation_action: block

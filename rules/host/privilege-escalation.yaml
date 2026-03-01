@@ -1,0 +1,57 @@
+id: HOST-002
+name: privilege-escalation
+version: "1.0"
+domain: host
+description: >
+  Detects privilege escalation attempts including setuid/setgid abuse,
+  sudo misuse, and exploitation of SUID binaries.
+
+conditions:
+  - id: COND-001
+    description: Process called setuid or setgid syscall
+    field: syscall.name
+    operator: in
+    value: ["setuid", "setgid", "setreuid", "setresuid"]
+
+  - id: COND-002
+    description: Unexpected sudo or su invocation
+    field: process.binary_path
+    operator: in
+    value: ["/usr/bin/sudo", "/bin/su"]
+
+  - id: COND-003
+    description: Process gained elevated capability
+    field: process.capabilities_gained
+    operator: not_empty
+    value: null
+
+  - id: COND-004
+    description: SUID binary executed outside approved list
+    field: process.suid_binary
+    operator: equals
+    value: true
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: medium
+    tier: T2
+  - conditions_matched: 2
+    severity: high
+    tier: T3
+  - conditions_matched: 3
+    severity: critical
+    tier: T4
+
+response:
+  t2:
+    - action: hold
+    - action: request_approval
+  t3:
+    - action: isolate_process
+    - action: revoke_tokens
+    - action: alert
+      target: security-team
+  t4:
+    - action: emergency_lockdown
+    - action: alert
+      target: ciso

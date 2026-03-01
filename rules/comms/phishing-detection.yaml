@@ -1,0 +1,56 @@
+id: COMMS-001
+name: phishing-detection
+version: "1.0"
+domain: comms
+description: >
+  Detects phishing indicators in communications across all supported channels:
+  spoofed/misleading links, urgency language patterns, and direct credential requests.
+
+conditions:
+  - id: COND-001
+    description: Message contains URL with domain mismatch (display vs actual)
+    field: message.links[].display_domain
+    operator: not_equals_field
+    value: message.links[].actual_domain
+
+  - id: COND-002
+    description: Message contains urgency trigger phrases
+    field: message.body
+    operator: regex_match
+    value: "(urgent|immediately|account.*suspended|verify.*now|click.*here.*immediately|your.*account.*will)"
+
+  - id: COND-003
+    description: Message explicitly requests credentials or OTP
+    field: message.body
+    operator: regex_match
+    value: "(password|otp|one.time.pin|security code|enter.*credentials)"
+
+  - id: COND-004
+    description: Sender domain recently registered (< 30 days)
+    field: sender.domain_age_days
+    operator: less_than
+    value: 30
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: low
+    tier: T1
+  - conditions_matched: 2
+    severity: medium
+    tier: T2
+  - conditions_matched: 3
+    severity: high
+    tier: T3
+
+response:
+  t1:
+    - action: alert
+      target: on-call-channel
+  t2:
+    - action: quarantine_message
+    - action: request_approval
+  t3:
+    - action: quarantine_message
+    - action: block_sender
+    - action: alert
+      target: security-team

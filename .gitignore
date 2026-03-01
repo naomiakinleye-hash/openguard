@@ -1,0 +1,16 @@
+# Build output
+/openguard
+*.test
+
+# Runtime data
+/data/
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
