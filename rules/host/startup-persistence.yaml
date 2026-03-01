@@ -1,0 +1,33 @@
+id: host.startup_persistence
+name: Startup Persistence Detection
+version: "1.0"
+description: Detects new or modified startup items including scheduled tasks, registry run keys, launch agents, systemd units, and cron entries.
+domain: host
+severity: high
+tier: T2
+enabled: true
+
+conditions:
+  any:
+    - field: event_type
+      equals: "startup_item_added"
+    - field: event_type
+      equals: "startup_item_modified"
+    - field: indicators
+      contains: "suspicious_persistence_path"
+    - field: indicators
+      contains: "encoded_command"
+    - field: indicators
+      contains: "curl_pipe_sh"
+
+response:
+  tier: T2
+  actions:
+    - type: alert
+      target: security_team
+    - type: hold
+      description: "Block startup item execution pending review"
+
+policy_refs:
+  - constitution.safety_over_autonomy
+  - openguard-v5.require_approval.process_termination
