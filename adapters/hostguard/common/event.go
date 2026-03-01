@@ -38,16 +38,20 @@ type StartupItem struct {
 
 // HostEvent is the raw host sensor event before normalization.
 type HostEvent struct {
-	EventType   string                 // process_created, process_terminated, process_anomaly,
+	EventType string // process_created, process_terminated, process_anomaly,
 	// privilege_escalation, startup_item_added, startup_item_modified,
-	// resource_spike, suspicious_path
-	Platform    string                 // windows, darwin, linux
-	Hostname    string
-	Timestamp   time.Time
-	Process     *ProcessInfo
-	StartupItem *StartupItem
-	Indicators  []string               // matched indicator strings
-	RawData     map[string]interface{}
+	// resource_spike, suspicious_path,
+	// file_access, file_modified, file_created, file_deleted, suspicious_file_access,
+	// hidden_process_detected
+	Platform      string // windows, darwin, linux
+	Hostname      string
+	Timestamp     time.Time
+	Process       *ProcessInfo
+	StartupItem   *StartupItem
+	FileIO        *FileIOEvent
+	HiddenProcess *HiddenProcessResult
+	Indicators    []string               // matched indicator strings
+	RawData       map[string]interface{}
 }
 
 // ToUnifiedEvent converts a HostEvent to the UnifiedEvent JSON format
@@ -87,6 +91,22 @@ func (e *HostEvent) ToUnifiedEvent() ([]byte, error) {
 		metadata["startup_item_type"] = e.StartupItem.Type
 		metadata["startup_item_command"] = e.StartupItem.Command
 		metadata["startup_item_source"] = e.StartupItem.Source
+	}
+	if e.FileIO != nil {
+		metadata["file_path"] = e.FileIO.Path
+		metadata["file_operation"] = e.FileIO.Operation
+		metadata["pid"] = e.FileIO.PID
+		metadata["process_name"] = e.FileIO.ProcessName
+		if e.FileIO.OldPath != "" {
+			metadata["file_old_path"] = e.FileIO.OldPath
+		}
+	}
+	if e.HiddenProcess != nil {
+		metadata["hidden_pid"] = e.HiddenProcess.PID
+		metadata["hidden_found_by"] = e.HiddenProcess.FoundBy
+		metadata["hidden_missing_from"] = e.HiddenProcess.MissingFrom
+		metadata["hidden_exe_path"] = e.HiddenProcess.ExePath
+		metadata["hidden_cmdline"] = e.HiddenProcess.CmdLine
 	}
 	for k, v := range e.RawData {
 		metadata[k] = v
@@ -164,6 +184,12 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 		return "info", 10.0, "T0"
 	case "suspicious_connection", "high_volume_connection":
 		return "high", 70.0, "T2"
+	case "hidden_process_detected":
+		return "critical", 90.0, "immediate"
+	case "suspicious_file_access":
+		return "high", 70.0, "T2"
+	case "file_access", "file_modified", "file_created", "file_deleted":
+		return "medium", 40.0, "T1"
 	default:
 		return "low", 20.0, "T1"
 	}

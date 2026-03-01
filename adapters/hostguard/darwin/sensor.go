@@ -14,18 +14,22 @@ import (
 )
 
 // DarwinSensor is the macOS implementation of the HostGuard Sensor interface.
-// It aggregates ProcessMonitor, LaunchdMonitor, LoginItemsMonitor, and NetworkMonitor.
+// It aggregates ProcessMonitor, LaunchdMonitor, LoginItemsMonitor, and NetworkMonitor,
+// as well as the real-time RealtimeProcessMonitor, FileMonitor, and HiddenProcessScanner.
 type DarwinSensor struct {
-	cfg        common.Config
-	publisher  *common.Publisher
-	logger     *zap.Logger
-	eventCh    chan *common.HostEvent
-	process    *ProcessMonitor
-	launchd    *LaunchdMonitor
-	loginItems *LoginItemsMonitor
-	network    *NetworkMonitor
-	wg         sync.WaitGroup
-	cancelFn   context.CancelFunc
+	cfg           common.Config
+	publisher     *common.Publisher
+	logger        *zap.Logger
+	eventCh       chan *common.HostEvent
+	process       *ProcessMonitor
+	realtimeProc  *RealtimeProcessMonitor
+	fileio        *FileMonitor
+	hiddenScanner *HiddenProcessScanner
+	launchd       *LaunchdMonitor
+	loginItems    *LoginItemsMonitor
+	network       *NetworkMonitor
+	wg            sync.WaitGroup
+	cancelFn      context.CancelFunc
 }
 
 // NewSensor constructs a DarwinSensor with the provided configuration.
@@ -43,6 +47,9 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 		eventCh:   eventCh,
 	}
 	s.process = newProcessMonitor(cfg, eventCh, logger)
+	s.realtimeProc = newRealtimeProcessMonitor(cfg, eventCh, logger)
+	s.fileio = newFileMonitor(cfg, eventCh, logger)
+	s.hiddenScanner = newHiddenProcessScanner(cfg, eventCh, logger)
 	s.launchd = newLaunchdMonitor(cfg, eventCh, logger)
 	s.loginItems = newLoginItemsMonitor(cfg, eventCh, logger)
 	s.network = newNetworkMonitor(cfg, eventCh, logger)
@@ -54,9 +61,21 @@ func (s *DarwinSensor) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 
-	if err := s.process.Start(ctx); err != nil {
-		cancel()
-		return fmt.Errorf("darwin sensor: start process monitor: %w", err)
+	// Try real-time kqueue process monitor first; fall back to polling if unavailable.
+	if err := s.realtimeProc.Start(ctx); err != nil {
+		s.logger.Warn("darwin sensor: realtime process monitor unavailable, using polling", zap.Error(err))
+		if err := s.process.Start(ctx); err != nil {
+			cancel()
+			return fmt.Errorf("darwin sensor: start process monitor: %w", err)
+		}
+	} else {
+		s.logger.Info("darwin sensor: using realtime (kqueue) process monitoring")
+	}
+	if err := s.fileio.Start(ctx); err != nil {
+		s.logger.Warn("darwin sensor: start file monitor", zap.Error(err))
+	}
+	if err := s.hiddenScanner.Start(ctx); err != nil {
+		s.logger.Warn("darwin sensor: start hidden process scanner", zap.Error(err))
 	}
 	if err := s.launchd.Start(ctx); err != nil {
 		s.logger.Warn("darwin sensor: start launchd monitor", zap.Error(err))
@@ -80,7 +99,10 @@ func (s *DarwinSensor) Stop() error {
 	if s.cancelFn != nil {
 		s.cancelFn()
 	}
+	s.realtimeProc.Stop()
 	s.process.Stop()
+	s.fileio.Stop()
+	s.hiddenScanner.Stop()
 	s.launchd.Stop()
 	s.loginItems.Stop()
 	s.network.Stop()

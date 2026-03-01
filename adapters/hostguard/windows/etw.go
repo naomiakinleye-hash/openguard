@@ -184,38 +184,9 @@ func (m *ETWProcessMonitor) emitEvent(ctx context.Context, eventType string, inf
 
 // ─── ETW session stubs ───────────────────────────────────────────────────────
 //
-// The functions below are thin wrappers around the Windows ETW API.
-// They are implemented here as stubs that return errors, because the Go
-// standard library does not expose ETW APIs directly and adding a cgo or
-// external dependency would change the module graph.
-//
-// In a production build these would be replaced with real ETW calls using
-// the Windows trace API (OpenTrace / ProcessTrace / CloseTrace) via
-// golang.org/x/sys/windows or a dedicated ETW library such as
-// github.com/bi-zone/etw.
-
-// startETWSession opens an ETW real-time session for the
-// Microsoft-Windows-Kernel-Process provider.
-// Returns an opaque session handle or an error if the session cannot be opened
-// (e.g. insufficient privileges).
-func startETWSession(name string) (interface{}, error) {
-	// Stub: ETW requires Administrator privileges and a real ETW library.
-	// Return an error so the sensor falls back to polling.
-	return nil, errETWUnavailable
-}
-
-// stopETWSession closes an ETW session returned by startETWSession.
-func stopETWSession(session interface{}) {}
-
-// readNextETWEvent reads the next available event from the session.
-// Returns (event, true) if an event is available, or (zero, false) otherwise.
-func readNextETWEvent(session interface{}) (etwEvent, bool) {
-	return etwEvent{}, false
-}
+// The functions startETWSession, stopETWSession, and readNextETWEvent are
+// implemented in etw_impl.go using the Windows ETW API.
 
 // errETWUnavailable is returned when ETW cannot be initialised.
 // This is expected on non-Administrator processes.
-// TODO: Replace the stub implementation above with a real ETW session using
-// github.com/bi-zone/etw or golang.org/x/sys/windows to call
-// OpenTrace/ProcessTrace/CloseTrace before using this in production.
 var errETWUnavailable = fmt.Errorf("windows: ETW session requires Administrator privileges")

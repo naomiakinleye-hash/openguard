@@ -14,18 +14,22 @@ import (
 )
 
 // LinuxSensor is the Linux implementation of the HostGuard Sensor interface.
-// It aggregates ProcessMonitor, SystemdMonitor, CronMonitor, and NetworkMonitor.
+// It aggregates ProcessMonitor, SystemdMonitor, CronMonitor, and NetworkMonitor,
+// as well as the real-time RealtimeProcessMonitor, FileMonitor, and HiddenProcessScanner.
 type LinuxSensor struct {
-	cfg       common.Config
-	publisher *common.Publisher
-	logger    *zap.Logger
-	eventCh   chan *common.HostEvent
-	process   *ProcessMonitor
-	systemd   *SystemdMonitor
-	cron      *CronMonitor
-	network   *NetworkMonitor
-	wg        sync.WaitGroup
-	cancelFn  context.CancelFunc
+	cfg           common.Config
+	publisher     *common.Publisher
+	logger        *zap.Logger
+	eventCh       chan *common.HostEvent
+	process       *ProcessMonitor
+	realtimeProc  *RealtimeProcessMonitor
+	fileio        *FileMonitor
+	hiddenScanner *HiddenProcessScanner
+	systemd       *SystemdMonitor
+	cron          *CronMonitor
+	network       *NetworkMonitor
+	wg            sync.WaitGroup
+	cancelFn      context.CancelFunc
 }
 
 // NewSensor constructs a LinuxSensor with the provided configuration.
@@ -43,6 +47,9 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 		eventCh:   eventCh,
 	}
 	s.process = newProcessMonitor(cfg, eventCh, logger)
+	s.realtimeProc = newRealtimeProcessMonitor(cfg, eventCh, logger)
+	s.fileio = newFileMonitor(cfg, eventCh, logger)
+	s.hiddenScanner = newHiddenProcessScanner(cfg, eventCh, logger)
 	s.systemd = newSystemdMonitor(cfg, eventCh, logger)
 	s.cron = newCronMonitor(cfg, eventCh, logger)
 	s.network = newNetworkMonitor(cfg, eventCh, logger)
@@ -54,9 +61,21 @@ func (s *LinuxSensor) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 
-	if err := s.process.Start(ctx); err != nil {
-		cancel()
-		return fmt.Errorf("linux sensor: start process monitor: %w", err)
+	// Try real-time netlink process monitor first; fall back to polling if unavailable.
+	if err := s.realtimeProc.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: realtime process monitor unavailable, using polling", zap.Error(err))
+		if err := s.process.Start(ctx); err != nil {
+			cancel()
+			return fmt.Errorf("linux sensor: start process monitor: %w", err)
+		}
+	} else {
+		s.logger.Info("linux sensor: using realtime (netlink) process monitoring")
+	}
+	if err := s.fileio.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start file monitor", zap.Error(err))
+	}
+	if err := s.hiddenScanner.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start hidden process scanner", zap.Error(err))
 	}
 	if err := s.systemd.Start(ctx); err != nil {
 		s.logger.Warn("linux sensor: start systemd monitor", zap.Error(err))
@@ -80,7 +99,10 @@ func (s *LinuxSensor) Stop() error {
 	if s.cancelFn != nil {
 		s.cancelFn()
 	}
+	s.realtimeProc.Stop()
 	s.process.Stop()
+	s.fileio.Stop()
+	s.hiddenScanner.Stop()
 	s.systemd.Stop()
 	s.cron.Stop()
 	s.network.Stop()

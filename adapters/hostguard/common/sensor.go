@@ -36,6 +36,10 @@ type Config struct {
 	SuspiciousPaths []string
 	// AllowlistedBinaries is the list of known-good binary names to suppress from alerts.
 	AllowlistedBinaries []string
+	// SensitivePathPrefixes is the list of path prefixes considered sensitive for file I/O monitoring.
+	SensitivePathPrefixes []string
+	// HiddenScanInterval is the interval between hidden process scans. Default: 60s.
+	HiddenScanInterval time.Duration
 }
 
 // AnomalyThresholds defines thresholds used for anomaly detection.
@@ -58,5 +62,16 @@ func DefaultConfig() Config {
 			MemoryMBHigh:    2048.0,
 			NewProcessBurst: 20,
 		},
+		SensitivePathPrefixes: []string{
+			"/etc/passwd",
+			"/etc/shadow",
+			"/etc/sudoers",
+			"/root",
+			"/root/.ssh",
+			"/boot",
+			`C:\Windows\System32\drivers`,
+			`C:\Windows\System32`,
+		},
+		HiddenScanInterval: 60 * time.Second,
 	}
 }

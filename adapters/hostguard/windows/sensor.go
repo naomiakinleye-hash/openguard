@@ -15,20 +15,22 @@ import (
 
 // WindowsSensor is the Windows implementation of the HostGuard Sensor interface.
 // It aggregates ProcessMonitor (or ETWProcessMonitor), SchedulerMonitor,
-// RegistryMonitor, NetworkMonitor, and ServicesMonitor.
+// RegistryMonitor, NetworkMonitor, ServicesMonitor, FileMonitor, and HiddenProcessScanner.
 type WindowsSensor struct {
-	cfg       common.Config
-	publisher *common.Publisher
-	logger    *zap.Logger
-	eventCh   chan *common.HostEvent
-	process   *ProcessMonitor
-	etwProc   *ETWProcessMonitor
-	scheduler *SchedulerMonitor
-	registry  *RegistryMonitor
-	network   *NetworkMonitor
-	services  *ServicesMonitor
-	wg        sync.WaitGroup
-	cancelFn  context.CancelFunc
+	cfg           common.Config
+	publisher     *common.Publisher
+	logger        *zap.Logger
+	eventCh       chan *common.HostEvent
+	process       *ProcessMonitor
+	etwProc       *ETWProcessMonitor
+	fileio        *FileMonitor
+	hiddenScanner *HiddenProcessScanner
+	scheduler     *SchedulerMonitor
+	registry      *RegistryMonitor
+	network       *NetworkMonitor
+	services      *ServicesMonitor
+	wg            sync.WaitGroup
+	cancelFn      context.CancelFunc
 }
 
 // NewSensor constructs a WindowsSensor with the provided configuration.
@@ -47,6 +49,8 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	}
 	s.process = newProcessMonitor(cfg, eventCh, logger)
 	s.etwProc = newETWProcessMonitor(cfg, eventCh, logger)
+	s.fileio = newFileMonitor(cfg, eventCh, logger)
+	s.hiddenScanner = newHiddenProcessScanner(cfg, eventCh, logger)
 	s.scheduler = newSchedulerMonitor(cfg, eventCh, logger)
 	s.registry = newRegistryMonitor(cfg, eventCh, logger)
 	s.network = newNetworkMonitor(cfg, eventCh, logger)
@@ -83,6 +87,12 @@ func (s *WindowsSensor) Start(ctx context.Context) error {
 	if err := s.services.Start(ctx); err != nil {
 		s.logger.Warn("windows sensor: start services monitor", zap.Error(err))
 	}
+	if err := s.fileio.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start file monitor", zap.Error(err))
+	}
+	if err := s.hiddenScanner.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start hidden process scanner", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -98,6 +108,8 @@ func (s *WindowsSensor) Stop() error {
 	}
 	s.etwProc.Stop()
 	s.process.Stop()
+	s.fileio.Stop()
+	s.hiddenScanner.Stop()
 	s.scheduler.Stop()
 	s.registry.Stop()
 	s.network.Stop()
