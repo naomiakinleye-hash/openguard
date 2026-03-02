@@ -457,3 +457,84 @@ t.Errorf("expected %s NOT to be loopback", addr)
 }
 }
 }
+
+// TestIPv6PrivateRangeDetection verifies IsPrivateRange correctly identifies
+// IPv6 private and link-local addresses.
+func TestIPv6PrivateRangeDetection(t *testing.T) {
+	privateIPv6Addrs := []string{
+		"::1",          // loopback
+		"fc00::1",      // ULA (fc00::/7)
+		"fd00::1",      // ULA (fd00::/8, inside fc00::/7)
+		"fe80::1",      // link-local (fe80::/10)
+		"fe80::dead:beef", // link-local
+	}
+	for _, addr := range privateIPv6Addrs {
+		if !common.IsPrivateRange(addr) {
+			t.Errorf("expected IPv6 %s to be in private range", addr)
+		}
+	}
+
+	publicIPv6Addrs := []string{
+		"2001:db8::1",    // documentation prefix (not private)
+		"2606:4700::1",   // Cloudflare
+		"2001:4860:4860::8888", // Google DNS
+	}
+	for _, addr := range publicIPv6Addrs {
+		if common.IsPrivateRange(addr) {
+			t.Errorf("expected IPv6 %s NOT to be in private range", addr)
+		}
+	}
+}
+
+// TestIPv6NetworkConnectionToUnifiedEvent verifies IPv6 network connection events
+// produce valid UnifiedEvent JSON.
+func TestIPv6NetworkConnectionToUnifiedEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType: "connection_established",
+		Platform:  "linux",
+		Hostname:  "test-host",
+		Timestamp: time.Now(),
+		Process: &common.ProcessInfo{
+			PID:  2345,
+			Name: "curl",
+		},
+		Indicators: []string{},
+		RawData: map[string]interface{}{
+			"protocol":    "tcp6",
+			"local_addr":  "::1",
+			"local_port":  uint16(54321),
+			"remote_addr": "2001:db8::1",
+			"remote_port": uint16(443),
+			"state":       "ESTABLISHED",
+			"direction":   "outbound",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal unified event: %v", err)
+	}
+
+	required := []string{
+		"event_id", "timestamp", "source", "domain", "severity",
+		"risk_score", "tier", "actor", "target", "human_approved", "audit_hash",
+	}
+	for _, field := range required {
+		if _, ok := result[field]; !ok {
+			t.Errorf("missing required field: %s", field)
+		}
+	}
+
+	metadata, ok := result["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata is not an object")
+	}
+	if metadata["protocol"] != "tcp6" {
+		t.Errorf("expected protocol=tcp6, got %v", metadata["protocol"])
+	}
+}

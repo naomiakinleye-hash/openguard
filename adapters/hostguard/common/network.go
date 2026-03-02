@@ -65,6 +65,7 @@ func IsPrivateRange(addr string) bool {
 		"127.0.0.0/8",
 		"::1/128",
 		"fc00::/7",
+		"fe80::/10",
 	}
 	for _, cidr := range privateRanges {
 		_, network, err := net.ParseCIDR(cidr)

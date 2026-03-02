@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -384,7 +385,7 @@ func parseHexAddr(hexAddr string, isIPv6 bool) (string, uint16, error) {
 }
 
 // parseIPv6HexAddr converts a 32-character hex string from /proc/net/tcp6 to
-// a colon-separated IPv6 address string.
+// a normalized IPv6 address string.
 // Each 4-byte group in the file is stored little-endian (reversed), so we
 // read each group as a uint32 in little-endian order and then reorder the bytes.
 func parseIPv6HexAddr(addrHex string) (string, error) {
@@ -401,16 +402,7 @@ func parseIPv6HexAddr(addrHex string) (string, error) {
 		reordered[i*4+2] = b[i*4+1]
 		reordered[i*4+3] = b[i*4+0]
 	}
-	return fmt.Sprintf("%x:%x:%x:%x:%x:%x:%x:%x",
-		uint16(reordered[0])<<8|uint16(reordered[1]),
-		uint16(reordered[2])<<8|uint16(reordered[3]),
-		uint16(reordered[4])<<8|uint16(reordered[5]),
-		uint16(reordered[6])<<8|uint16(reordered[7]),
-		uint16(reordered[8])<<8|uint16(reordered[9]),
-		uint16(reordered[10])<<8|uint16(reordered[11]),
-		uint16(reordered[12])<<8|uint16(reordered[13]),
-		uint16(reordered[14])<<8|uint16(reordered[15]),
-	), nil
+	return net.IP(reordered[:]).String(), nil
 }
 
 // connKey returns a stable map key for a network connection.
