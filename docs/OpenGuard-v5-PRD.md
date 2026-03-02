@@ -35,7 +35,7 @@ To protect organizations from endpoint threats, communication-based attacks, and
 Monitors operating-system level behaviour: process tree anomalies, privilege escalation attempts, unusual binary execution, and resource abuse.
 
 ### CommsGuard
-Monitors communication channels (WhatsApp, Telegram, Facebook Messenger, Twilio SMS/Voice) for phishing, credential harvesting, data exfiltration, and social engineering patterns.
+Monitors communication channels (WhatsApp, Telegram, Facebook Messenger, Twilio SMS/Voice, Twitter/X) for phishing, credential harvesting, data exfiltration, and social engineering patterns.
 
 ### AgentGuard
 Supervises AI agents deployed within the organization: detects unsanctioned external outreach, tool-use outside approved scope, and attempts to modify their own operational policies.
