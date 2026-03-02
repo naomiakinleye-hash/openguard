@@ -1,0 +1,13 @@
+# policies/agent-tools.yaml — Per-agent approved tool allowlists.
+# Each agent entry lists the tool names that the agent is permitted to call.
+# Any tool not in the approved_tools list will trigger a tool_use_outside_scope event.
+agents:
+  - id: "agent-finance"
+    approved_tools:
+      - "read_database"
+      - "generate_report"
+      - "send_internal_email"
+  - id: "agent-hr"
+    approved_tools:
+      - "read_hr_database"
+      - "schedule_meeting"

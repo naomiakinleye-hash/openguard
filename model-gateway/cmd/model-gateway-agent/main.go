@@ -20,17 +20,21 @@ import (
 	"go.uber.org/zap"
 
 	mg "github.com/DiniMuhd7/openguard/model-gateway/interfaces"
+	"github.com/DiniMuhd7/openguard/model-gateway/audit"
 	"github.com/DiniMuhd7/openguard/model-gateway/guardrails"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/claude"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/codex"
 	"github.com/DiniMuhd7/openguard/model-gateway/providers/gemini"
 	"github.com/DiniMuhd7/openguard/model-gateway/routing"
+	"github.com/DiniMuhd7/openguard/model-gateway/toolcheck"
 )
 
 // modelRequest is the JSON schema for incoming NATS model requests.
 type modelRequest struct {
 	EventID    string   `json:"event_id"`
+	AgentID    string   `json:"agent_id"`
 	Prompt     string   `json:"prompt"`
+	ToolCalls  []string `json:"tool_calls,omitempty"`
 	RiskLevel  string   `json:"risk_level"`
 	Domain     string   `json:"domain"`
 	Indicators []string `json:"indicators"`
@@ -93,6 +97,19 @@ func main() {
 		MinConfidenceThreshold: minConfidence,
 	})
 
+	// ── Build tool intent checker ────────────────────────────────────────────
+	toolPolicyPath := envOr("OPENGUARD_TOOL_POLICY_PATH", "policies/agent-tools.yaml")
+	toolChecker, err := toolcheck.New(toolcheck.Config{PolicyPath: toolPolicyPath}, logger)
+	if err != nil {
+		logger.Warn("model-gateway-agent: could not load tool policy, falling back to allow-all",
+			zap.String("path", toolPolicyPath), zap.Error(err))
+		fallback, ferr := toolcheck.New(toolcheck.Config{}, logger)
+		if ferr != nil {
+			logger.Fatal("model-gateway-agent: failed to initialize tool intent checker", zap.Error(ferr))
+		}
+		toolChecker = fallback
+	}
+
 	// ── Build router ─────────────────────────────────────────────────────────
 	router := routing.NewRouter(providers, routing.Config{PrimaryProviderIndex: 0}, logger)
 
@@ -104,6 +121,15 @@ func main() {
 	}
 	defer nc.Drain() //nolint:errcheck
 
+	// ── Build audit ledger ───────────────────────────────────────────────────
+	auditPath := envOr("OPENGUARD_AUDIT_PATH", audit.DefaultStoragePath)
+	auditLedger := audit.New(audit.Config{StoragePath: auditPath}, nc, logger)
+	if err := auditLedger.Open(); err != nil {
+		logger.Warn("model-gateway-agent: could not open audit ledger file",
+			zap.String("path", auditPath), zap.Error(err))
+	}
+	defer auditLedger.Close() //nolint:errcheck
+
 	logger.Info("model-gateway-agent: started",
 		zap.String("provider", primaryProvider),
 		zap.String("strategy", strategy),
@@ -114,7 +140,7 @@ func main() {
 
 	// ── Subscribe to model requests ──────────────────────────────────────────
 	sub, err := nc.Subscribe(modelTopic, func(msg *nats.Msg) {
-		handleMessage(msg, nc, resultTopic, pipeline, router, logger)
+		handleMessage(msg, nc, resultTopic, pipeline, toolChecker, router, auditLedger, strategy, logger)
 	})
 	if err != nil {
 		logger.Fatal("model-gateway-agent: failed to subscribe", zap.String("topic", modelTopic), zap.Error(err))
@@ -164,13 +190,17 @@ func main() {
 	logger.Info("model-gateway-agent: stopped")
 }
 
-// handleMessage processes a single NATS message: sanitize → dispatch → validate → publish.
+// handleMessage processes a single NATS message through the 7-stage pipeline:
+// sanitize → tool check → route → validate → code scan → audit → publish.
 func handleMessage(
 	msg *nats.Msg,
 	nc *nats.Conn,
 	resultTopic string,
 	pipeline *guardrails.Pipeline,
+	toolChecker *toolcheck.ToolIntentChecker,
 	router *routing.Router,
+	auditLedger *audit.AuditLedger,
+	routingStrategy string,
 	logger *zap.Logger,
 ) {
 	var req modelRequest
@@ -189,7 +219,20 @@ func handleMessage(
 		return
 	}
 
-	// Stage 2: Dispatch to router.
+	// Stage 2: Tool intent check.
+	if len(req.ToolCalls) > 0 {
+		if err := toolChecker.Check(req.AgentID, req.ToolCalls); err != nil {
+			logger.Warn("model-gateway-agent: tool intent check failed",
+				zap.String("event_id", req.EventID),
+				zap.String("agent_id", req.AgentID),
+				zap.String("indicator", "tool_use_outside_scope"),
+				zap.Error(err))
+			publishError(nc, resultTopic, req.EventID, fmt.Sprintf("tool check: %v", err), logger)
+			return
+		}
+	}
+
+	// Stage 3: Dispatch to router.
 	eventCtx := mg.EventContext{
 		EventID:    req.EventID,
 		Domain:     req.Domain,
@@ -205,7 +248,9 @@ func handleMessage(
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	dispatchStart := time.Now()
 	result, err := router.Route(ctx, eventCtx, riskLevel)
+	latencyMS := time.Since(dispatchStart).Milliseconds()
 	if err != nil {
 		logger.Warn("model-gateway-agent: router error",
 			zap.String("event_id", req.EventID), zap.Error(err))
@@ -221,7 +266,32 @@ func handleMessage(
 		return
 	}
 
-	// Stage 5: Publish result.
+	// Stage 5: Code sandbox scan.
+	scanResult := pipeline.ScanCode(result.Summary)
+	if scanResult.ContainsCode {
+		logger.Warn("model-gateway-agent: executable code in model output",
+			zap.String("event_id", req.EventID),
+			zap.String("indicator", "executable_code_in_model_output"),
+			zap.Strings("patterns", scanResult.Patterns))
+		result.Summary = scanResult.Sanitized
+	}
+
+	// Stage 6: Audit ledger record.
+	auditEntry := audit.AuditEntry{
+		AgentID:         req.AgentID,
+		Provider:        result.ProviderName,
+		InputHash:       audit.HashString(sanitized),
+		OutputHash:      audit.HashString(result.Summary),
+		LatencyMS:       latencyMS,
+		RiskLevel:       string(riskLevel),
+		RoutingStrategy: routingStrategy,
+	}
+	if err := auditLedger.Record(ctx, auditEntry); err != nil {
+		logger.Warn("model-gateway-agent: audit record failed",
+			zap.String("event_id", req.EventID), zap.Error(err))
+	}
+
+	// Stage 7: Publish result.
 	resp := modelResponse{
 		EventID:    req.EventID,
 		Result:     result,
