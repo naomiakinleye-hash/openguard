@@ -32,6 +32,7 @@ type ProcessMonitor struct {
 	lastPIDs map[uint32]darwinProcessSnapshot
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+	browser  *common.BrowserActivityAnalyzer
 }
 
 // newProcessMonitor creates a ProcessMonitor that sends events to eventCh.
@@ -41,6 +42,7 @@ func newProcessMonitor(cfg common.Config, eventCh chan<- *common.HostEvent, logg
 		eventCh:  eventCh,
 		logger:   logger,
 		lastPIDs: make(map[uint32]darwinProcessSnapshot),
+		browser:  common.NewBrowserActivityAnalyzer(),
 	}
 }
 
@@ -96,6 +98,9 @@ func (m *ProcessMonitor) poll(ctx context.Context) {
 		if _, existed := last[pid]; !existed {
 			m.emitEvent(ctx, "process_created", &snap.info, nil)
 			m.checkAnomalies(ctx, &snap.info)
+		}
+		if indicators := m.browser.AnalyzeProcess(&snap.info); len(indicators) > 0 {
+			m.emitEvent(ctx, "browser_anomaly", &snap.info, indicators)
 		}
 	}
 	for pid, snap := range last {

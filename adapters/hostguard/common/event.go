@@ -53,7 +53,13 @@ type HostEvent struct {
 	// ipc_shared_memory_created, ipc_shared_memory_deleted,
 	// named_pipe_created, suspicious_ipc, suspicious_unix_socket, suspicious_named_pipe,
 	// container_escape_attempt, privileged_container_process,
-	// container_process_created, container_started, container_stopped
+	// container_process_created, container_started, container_stopped,
+	// usb_device_inserted, usb_device_removed, usb_mass_storage_inserted, usb_hid_inserted,
+	// syscall_execve, syscall_openat, suspicious_syscall_sequence,
+	// cloud_metadata_access, suspicious_cloud_metadata_access,
+	// low_and_slow_anomaly,
+	// secure_boot_status, firmware_setup_mode, efi_variable_modified, kernel_hardening_disabled,
+	// browser_anomaly
 	Platform      string // windows, darwin, linux
 	Hostname      string
 	Timestamp     time.Time
@@ -192,16 +198,29 @@ func (e *HostEvent) ToUnifiedEvent() ([]byte, error) {
 
 // classifyEvent assigns severity, risk_score, and tier based on event type and indicators.
 func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier string) {
-	// critical_service_stopped indicator always maps to T3.
+	// Indicator special-cases take priority over event type.
 	for _, ind := range e.Indicators {
-		if ind == "critical_service_stopped" {
+		switch ind {
+		case "critical_service_stopped":
 			return "critical", 95.0, "T3"
-		}
-		if ind == "suspicious_kernel_module" {
+		case "suspicious_kernel_module":
 			return "critical", 95.0, "immediate"
-		}
-		if ind == "hidden_driver" {
+		case "hidden_driver":
 			return "critical", 95.0, "immediate"
+		case "usb_mass_storage_inserted":
+			return "high", 70.0, "T2"
+		case "usb_hid_inserted":
+			return "high", 70.0, "T2"
+		case "imds_abuse":
+			return "critical", 95.0, "immediate"
+		case "secure_boot_disabled":
+			return "high", 70.0, "T2"
+		case "firmware_setup_mode":
+			return "critical", 95.0, "immediate"
+		case "browser_remote_debugging_enabled":
+			return "high", 70.0, "T2"
+		case "browser_security_disabled":
+			return "high", 75.0, "T2"
 		}
 	}
 	switch e.EventType {
@@ -254,6 +273,42 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 		return "high", 75.0, "T3"
 	case "container_process_created", "container_started", "container_stopped":
 		return "info", 10.0, "T0"
+	// USB / Peripheral Device events.
+	case "usb_device_inserted":
+		return "medium", 40.0, "T1"
+	case "usb_device_removed":
+		return "info", 10.0, "T0"
+	case "usb_mass_storage_inserted":
+		return "high", 70.0, "T2"
+	case "usb_hid_inserted":
+		return "high", 65.0, "T2"
+	// eBPF syscall tracing events.
+	case "syscall_execve":
+		return "info", 15.0, "T0"
+	case "syscall_openat":
+		return "info", 10.0, "T0"
+	case "suspicious_syscall_sequence":
+		return "high", 75.0, "T2"
+	// Cloud metadata service events.
+	case "cloud_metadata_access":
+		return "info", 20.0, "T1"
+	case "suspicious_cloud_metadata_access":
+		return "critical", 90.0, "immediate"
+	// Low-and-slow anomaly.
+	case "low_and_slow_anomaly":
+		return "medium", 55.0, "T2"
+	// Firmware / secure boot events.
+	case "secure_boot_status":
+		return "info", 10.0, "T0"
+	case "firmware_setup_mode":
+		return "critical", 95.0, "immediate"
+	case "efi_variable_modified":
+		return "high", 75.0, "T2"
+	case "kernel_hardening_disabled":
+		return "medium", 50.0, "T2"
+	// Browser activity events.
+	case "browser_anomaly":
+		return "medium", 50.0, "T2"
 	default:
 		return "low", 20.0, "T1"
 	}

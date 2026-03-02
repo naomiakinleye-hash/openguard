@@ -16,7 +16,8 @@ import (
 // WindowsSensor is the Windows implementation of the HostGuard Sensor interface.
 // It aggregates ProcessMonitor (or ETWProcessMonitor), SchedulerMonitor,
 // RegistryMonitor, NetworkMonitor, ServicesMonitor, FileMonitor, HiddenProcessScanner,
-// ResourceMonitor, DriverMonitor, SessionMonitor, DNSMonitor, and NamedPipeMonitor.
+// ResourceMonitor, DriverMonitor, SessionMonitor, DNSMonitor, NamedPipeMonitor,
+// and USBMonitor.
 type WindowsSensor struct {
 	cfg           common.Config
 	publisher     *common.Publisher
@@ -35,6 +36,7 @@ type WindowsSensor struct {
 	session       *SessionMonitor
 	dns           *DNSMonitor
 	pipe          *NamedPipeMonitor
+	usb           *USBMonitor
 	wg            sync.WaitGroup
 	cancelFn      context.CancelFunc
 }
@@ -66,6 +68,7 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.session = newSessionMonitor(cfg, eventCh, logger)
 	s.dns = newDNSMonitor(cfg, eventCh, logger)
 	s.pipe = newNamedPipeMonitor(cfg, eventCh, logger)
+	s.usb = newUSBMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -119,6 +122,9 @@ func (s *WindowsSensor) Start(ctx context.Context) error {
 	if err := s.pipe.Start(ctx); err != nil {
 		s.logger.Warn("windows sensor: start named pipe monitor", zap.Error(err))
 	}
+	if err := s.usb.Start(ctx); err != nil {
+		s.logger.Warn("windows sensor: start usb monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -145,6 +151,7 @@ func (s *WindowsSensor) Stop() error {
 	s.session.Stop()
 	s.dns.Stop()
 	s.pipe.Stop()
+	s.usb.Stop()
 	s.wg.Wait()
 	s.logger.Info("windows sensor: stopped")
 	return nil

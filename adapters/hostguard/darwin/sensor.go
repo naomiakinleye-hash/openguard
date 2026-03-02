@@ -16,7 +16,7 @@ import (
 // DarwinSensor is the macOS implementation of the HostGuard Sensor interface.
 // It aggregates ProcessMonitor, LaunchdMonitor, LoginItemsMonitor, and NetworkMonitor,
 // as well as the real-time RealtimeProcessMonitor, FileMonitor, HiddenProcessScanner,
-// ResourceMonitor, KextMonitor, SessionMonitor, DNSMonitor, and IPCMonitor.
+// ResourceMonitor, KextMonitor, SessionMonitor, DNSMonitor, IPCMonitor, and USBMonitor.
 type DarwinSensor struct {
 	cfg           common.Config
 	publisher     *common.Publisher
@@ -34,6 +34,7 @@ type DarwinSensor struct {
 	session       *SessionMonitor
 	dns           *DNSMonitor
 	ipc           *IPCMonitor
+	usb           *USBMonitor
 	wg            sync.WaitGroup
 	cancelFn      context.CancelFunc
 }
@@ -64,6 +65,7 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.session = newSessionMonitor(cfg, eventCh, logger)
 	s.dns = newDNSMonitor(cfg, eventCh, logger)
 	s.ipc = newIPCMonitor(cfg, eventCh, logger)
+	s.usb = newUSBMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -112,6 +114,9 @@ func (s *DarwinSensor) Start(ctx context.Context) error {
 	if err := s.ipc.Start(ctx); err != nil {
 		s.logger.Warn("darwin sensor: start ipc monitor", zap.Error(err))
 	}
+	if err := s.usb.Start(ctx); err != nil {
+		s.logger.Warn("darwin sensor: start usb monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -137,6 +142,7 @@ func (s *DarwinSensor) Stop() error {
 	s.session.Stop()
 	s.dns.Stop()
 	s.ipc.Stop()
+	s.usb.Stop()
 	s.wg.Wait()
 	s.logger.Info("darwin sensor: stopped")
 	return nil

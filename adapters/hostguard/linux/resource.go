@@ -29,13 +29,14 @@ type pidSample struct {
 // memory usage, emitting resource_spike events when thresholds are exceeded for
 // two consecutive samples.
 type ResourceMonitor struct {
-	cfg      common.Config
-	eventCh  chan<- *common.HostEvent
-	logger   *zap.Logger
-	samples  map[uint32][]pidSample // rolling window: last 2 samples per PID
-	mu       sync.Mutex
-	cancelFn context.CancelFunc
-	wg       sync.WaitGroup
+	cfg       common.Config
+	eventCh   chan<- *common.HostEvent
+	logger    *zap.Logger
+	samples   map[uint32][]pidSample // rolling window: last 2 samples per PID
+	mu        sync.Mutex
+	cancelFn  context.CancelFunc
+	wg        sync.WaitGroup
+	lowSlow   *common.LowSlowDetector
 }
 
 // newResourceMonitor creates a ResourceMonitor that sends events to eventCh.
@@ -45,6 +46,7 @@ func newResourceMonitor(cfg common.Config, eventCh chan<- *common.HostEvent, log
 		eventCh: eventCh,
 		logger:  logger,
 		samples: make(map[uint32][]pidSample),
+		lowSlow: common.NewLowSlowDetector(0),
 	}
 }
 
@@ -139,6 +141,29 @@ func (m *ResourceMonitor) poll(ctx context.Context) {
 		}
 		const hz = 100.0 // USER_HZ on Linux
 		cpuPct := float64(curr.cpuJiffies-prev.cpuJiffies) / hz / elapsed * 100.0 * numCPUs
+
+		// Record CPU sample for low-and-slow detection.
+		m.lowSlow.RecordCPUSample(pid, cpuPct, now)
+		if indicators := m.lowSlow.Evaluate(pid); len(indicators) > 0 {
+			procName := readProcName(pid)
+			lowSlowEvent := &common.HostEvent{
+				EventType: "low_and_slow_anomaly",
+				Platform:  "linux",
+				Hostname:  m.cfg.Hostname,
+				Timestamp: now,
+				Process: &common.ProcessInfo{
+					PID:        pid,
+					Name:       procName,
+					CPUPercent: cpuPct,
+				},
+				Indicators: indicators,
+			}
+			select {
+			case m.eventCh <- lowSlowEvent:
+			case <-ctx.Done():
+				return
+			}
+		}
 
 		cpuHigh := cpuPct > m.cfg.AnomalyThresholds.CPUPercentHigh
 		memHigh := curr.memoryMB > m.cfg.AnomalyThresholds.MemoryMBHigh

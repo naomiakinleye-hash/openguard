@@ -17,7 +17,8 @@ import (
 // It aggregates ProcessMonitor, SystemdMonitor, CronMonitor, and NetworkMonitor,
 // as well as the real-time RealtimeProcessMonitor, FileMonitor, HiddenProcessScanner,
 // ResourceMonitor, KernelModuleMonitor, SessionMonitor, DNSMonitor,
-// IPCMonitor, and ContainerMonitor.
+// IPCMonitor, ContainerMonitor, USBMonitor, EBPFSyscallMonitor,
+// CloudMetadataMonitor, and FirmwareMonitor.
 type LinuxSensor struct {
 	cfg           common.Config
 	publisher     *common.Publisher
@@ -36,6 +37,10 @@ type LinuxSensor struct {
 	dns           *DNSMonitor
 	ipc           *IPCMonitor
 	container     *ContainerMonitor
+	usb           *USBMonitor
+	ebpf          *EBPFSyscallMonitor
+	cloudMeta     *CloudMetadataMonitor
+	firmware      *FirmwareMonitor
 	wg            sync.WaitGroup
 	cancelFn      context.CancelFunc
 }
@@ -67,6 +72,10 @@ func NewSensor(cfg common.Config, publisher *common.Publisher, logger *zap.Logge
 	s.dns = newDNSMonitor(cfg, eventCh, logger)
 	s.ipc = newIPCMonitor(cfg, eventCh, logger)
 	s.container = newContainerMonitor(cfg, eventCh, logger)
+	s.usb = newUSBMonitor(cfg, eventCh, logger)
+	s.ebpf = newEBPFSyscallMonitor(cfg, eventCh, logger)
+	s.cloudMeta = newCloudMetadataMonitor(cfg, eventCh, logger)
+	s.firmware = newFirmwareMonitor(cfg, eventCh, logger)
 	return s
 }
 
@@ -118,6 +127,18 @@ func (s *LinuxSensor) Start(ctx context.Context) error {
 	if err := s.container.Start(ctx); err != nil {
 		s.logger.Warn("linux sensor: start container monitor", zap.Error(err))
 	}
+	if err := s.usb.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start usb monitor", zap.Error(err))
+	}
+	if err := s.ebpf.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start ebpf syscall monitor", zap.Error(err))
+	}
+	if err := s.cloudMeta.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start cloud metadata monitor", zap.Error(err))
+	}
+	if err := s.firmware.Start(ctx); err != nil {
+		s.logger.Warn("linux sensor: start firmware monitor", zap.Error(err))
+	}
 
 	s.wg.Add(1)
 	go s.publishLoop(ctx)
@@ -144,6 +165,10 @@ func (s *LinuxSensor) Stop() error {
 	s.dns.Stop()
 	s.ipc.Stop()
 	s.container.Stop()
+	s.usb.Stop()
+	s.ebpf.Stop()
+	s.cloudMeta.Stop()
+	s.firmware.Stop()
 	s.wg.Wait()
 	s.logger.Info("linux sensor: stopped")
 	return nil

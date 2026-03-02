@@ -538,3 +538,393 @@ func TestIPv6NetworkConnectionToUnifiedEvent(t *testing.T) {
 		t.Errorf("expected protocol=tcp6, got %v", metadata["protocol"])
 	}
 }
+
+// TestUSBDeviceInsertedEvent verifies usb_device_inserted produces severity="medium", tier="T1".
+func TestUSBDeviceInsertedEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType: "usb_device_inserted",
+		Platform:  "linux",
+		Hostname:  "test-host",
+		Timestamp: time.Now(),
+		RawData: map[string]interface{}{
+			"vendor_id":    "0x1234",
+			"product_id":   "0x5678",
+			"manufacturer": "Test Corp",
+			"product_name": "USB Widget",
+			"device_class": "00",
+			"device_path":  "/sys/bus/usb/devices/1-1",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "medium" {
+		t.Errorf("expected severity=medium for usb_device_inserted, got %v", result["severity"])
+	}
+	if result["tier"] != "T1" {
+		t.Errorf("expected tier=T1 for usb_device_inserted, got %v", result["tier"])
+	}
+}
+
+// TestUSBMassStorageEvent verifies usb_mass_storage_inserted produces severity="high", tier="T2".
+func TestUSBMassStorageEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "usb_mass_storage_inserted",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"usb_mass_storage_inserted"},
+		RawData: map[string]interface{}{
+			"vendor_id":    "0xabcd",
+			"product_id":   "0xef01",
+			"manufacturer": "StoreCo",
+			"product_name": "USB Flash Drive",
+			"device_class": "08",
+			"device_path":  "/sys/bus/usb/devices/1-2",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "high" {
+		t.Errorf("expected severity=high for usb_mass_storage_inserted, got %v", result["severity"])
+	}
+	if result["tier"] != "T2" {
+		t.Errorf("expected tier=T2 for usb_mass_storage_inserted, got %v", result["tier"])
+	}
+}
+
+// TestCloudMetadataAbuseEvent verifies suspicious_cloud_metadata_access with
+// indicator "imds_abuse" produces severity="critical", tier="immediate".
+func TestCloudMetadataAbuseEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "suspicious_cloud_metadata_access",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"imds_abuse"},
+		Process: &common.ProcessInfo{
+			PID:  1234,
+			Name: "evil-script",
+		},
+		RawData: map[string]interface{}{
+			"pid":          uint32(1234),
+			"process_name": "evil-script",
+			"destination":  "169.254.169.254:80",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "critical" {
+		t.Errorf("expected severity=critical, got %v", result["severity"])
+	}
+	if result["tier"] != "immediate" {
+		t.Errorf("expected tier=immediate, got %v", result["tier"])
+	}
+}
+
+// TestLowSlowAnomalyEvent verifies low_and_slow_anomaly produces severity="medium", tier="T2".
+func TestLowSlowAnomalyEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "low_and_slow_anomaly",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"low_and_slow_cpu"},
+		Process: &common.ProcessInfo{
+			PID:        5678,
+			Name:       "cryptominer",
+			CPUPercent: 12.5,
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "medium" {
+		t.Errorf("expected severity=medium for low_and_slow_anomaly, got %v", result["severity"])
+	}
+	if result["tier"] != "T2" {
+		t.Errorf("expected tier=T2 for low_and_slow_anomaly, got %v", result["tier"])
+	}
+}
+
+// TestFirmwareSetupModeEvent verifies firmware_setup_mode produces severity="critical", tier="immediate".
+func TestFirmwareSetupModeEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "firmware_setup_mode",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"firmware_setup_mode"},
+		RawData: map[string]interface{}{
+			"setup_mode": true,
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "critical" {
+		t.Errorf("expected severity=critical for firmware_setup_mode, got %v", result["severity"])
+	}
+	if result["tier"] != "immediate" {
+		t.Errorf("expected tier=immediate for firmware_setup_mode, got %v", result["tier"])
+	}
+}
+
+// TestBrowserAnomalyEvent verifies browser_anomaly produces severity="medium", tier="T2".
+func TestBrowserAnomalyEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "browser_anomaly",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"browser_suspicious_path"},
+		Process: &common.ProcessInfo{
+			PID:     9012,
+			Name:    "chrome",
+			ExePath: "/tmp/chrome",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "medium" {
+		t.Errorf("expected severity=medium for browser_anomaly, got %v", result["severity"])
+	}
+	if result["tier"] != "T2" {
+		t.Errorf("expected tier=T2 for browser_anomaly, got %v", result["tier"])
+	}
+}
+
+// TestBrowserRemoteDebuggingEvent verifies browser_anomaly with indicator
+// "browser_remote_debugging_enabled" produces severity="high", tier="T2".
+func TestBrowserRemoteDebuggingEvent(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "browser_anomaly",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"browser_remote_debugging_enabled"},
+		Process: &common.ProcessInfo{
+			PID:     3456,
+			Name:    "chrome",
+			ExePath: "/usr/bin/chrome",
+			CmdLine: "chrome --remote-debugging-port=9222",
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "high" {
+		t.Errorf("expected severity=high for browser_anomaly+browser_remote_debugging_enabled, got %v", result["severity"])
+	}
+	if result["tier"] != "T2" {
+		t.Errorf("expected tier=T2, got %v", result["tier"])
+	}
+}
+
+// TestBrowserActivityAnalyzer verifies BrowserActivityAnalyzer.AnalyzeProcess
+// returns the correct indicators for various process configurations.
+func TestBrowserActivityAnalyzer(t *testing.T) {
+	analyzer := common.NewBrowserActivityAnalyzer()
+
+	// Non-browser process → no indicators.
+	nonBrowser := &common.ProcessInfo{
+		PID:     1,
+		Name:    "bash",
+		ExePath: "/bin/bash",
+		CmdLine: "bash",
+	}
+	if indicators := analyzer.AnalyzeProcess(nonBrowser); len(indicators) != 0 {
+		t.Errorf("expected no indicators for non-browser, got %v", indicators)
+	}
+
+	// Browser with suspicious path.
+	suspPath := &common.ProcessInfo{
+		PID:     2,
+		Name:    "chrome",
+		ExePath: "/tmp/chrome",
+		CmdLine: "chrome",
+	}
+	indicators := analyzer.AnalyzeProcess(suspPath)
+	if !containsIndicator(indicators, "browser_suspicious_path") {
+		t.Errorf("expected browser_suspicious_path for /tmp/chrome, got %v", indicators)
+	}
+
+	// Browser with remote debugging port flag.
+	debugProc := &common.ProcessInfo{
+		PID:     3,
+		Name:    "chrome",
+		ExePath: "/usr/bin/chrome",
+		CmdLine: "chrome --remote-debugging-port=9222",
+	}
+	indicators = analyzer.AnalyzeProcess(debugProc)
+	if !containsIndicator(indicators, "browser_remote_debugging_enabled") {
+		t.Errorf("expected browser_remote_debugging_enabled, got %v", indicators)
+	}
+
+	// Browser with --disable-web-security flag.
+	insecureProc := &common.ProcessInfo{
+		PID:     4,
+		Name:    "chrome",
+		ExePath: "/usr/bin/chrome",
+		CmdLine: "chrome --disable-web-security",
+	}
+	indicators = analyzer.AnalyzeProcess(insecureProc)
+	if !containsIndicator(indicators, "browser_security_disabled") {
+		t.Errorf("expected browser_security_disabled for --disable-web-security, got %v", indicators)
+	}
+
+	// Browser with --allow-running-insecure-content flag.
+	insecureProc2 := &common.ProcessInfo{
+		PID:     5,
+		Name:    "firefox",
+		ExePath: "/usr/bin/firefox",
+		CmdLine: "firefox --allow-running-insecure-content",
+	}
+	indicators = analyzer.AnalyzeProcess(insecureProc2)
+	if !containsIndicator(indicators, "browser_security_disabled") {
+		t.Errorf("expected browser_security_disabled for --allow-running-insecure-content, got %v", indicators)
+	}
+}
+
+// TestLowSlowDetector verifies LowSlowDetector correctly emits indicators
+// after recording appropriate samples.
+func TestLowSlowDetector(t *testing.T) {
+	detector := common.NewLowSlowDetector(5 * time.Minute)
+
+	pid := uint32(1234)
+	now := time.Now()
+
+	// Record CPU samples spanning more than the window (6 minutes back to now).
+	// Average CPU = 10% (low-and-slow range 5-20%).
+	windowStart := now.Add(-6 * time.Minute)
+	step := time.Minute
+	for i := 0; i <= 6; i++ {
+		detector.RecordCPUSample(pid, 10.0, windowStart.Add(time.Duration(i)*step))
+	}
+
+	indicators := detector.Evaluate(pid)
+	if !containsIndicator(indicators, "low_and_slow_cpu") {
+		t.Errorf("expected low_and_slow_cpu after sustained 10%% CPU, got %v", indicators)
+	}
+
+	// Record more than 10 process spawns within the window.
+	pid2 := uint32(5678)
+	for i := 0; i < 12; i++ {
+		detector.RecordProcessSpawn(pid2, now.Add(-time.Duration(i)*10*time.Second))
+	}
+	indicators2 := detector.Evaluate(pid2)
+	if !containsIndicator(indicators2, "process_spawn_burst") {
+		t.Errorf("expected process_spawn_burst after >10 spawns, got %v", indicators2)
+	}
+
+	// Record more than 100 network connections within the window.
+	pid3 := uint32(9012)
+	for i := 0; i < 101; i++ {
+		detector.RecordNetworkConnection(pid3, now.Add(-time.Duration(i)*time.Second))
+	}
+	indicators3 := detector.Evaluate(pid3)
+	if !containsIndicator(indicators3, "network_connection_burst") {
+		t.Errorf("expected network_connection_burst after >100 connections, got %v", indicators3)
+	}
+}
+
+// TestSecureBootDisabledIndicator verifies that the "secure_boot_disabled" indicator
+// in a HostEvent maps to severity="high", tier="T2".
+func TestSecureBootDisabledIndicator(t *testing.T) {
+	event := &common.HostEvent{
+		EventType:  "secure_boot_status",
+		Platform:   "linux",
+		Hostname:   "test-host",
+		Timestamp:  time.Now(),
+		Indicators: []string{"secure_boot_disabled"},
+		RawData: map[string]interface{}{
+			"secure_boot_enabled": false,
+		},
+	}
+
+	payload, err := event.ToUnifiedEvent()
+	if err != nil {
+		t.Fatalf("ToUnifiedEvent failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if result["severity"] != "high" {
+		t.Errorf("expected severity=high for secure_boot_disabled indicator, got %v", result["severity"])
+	}
+	if result["tier"] != "T2" {
+		t.Errorf("expected tier=T2 for secure_boot_disabled indicator, got %v", result["tier"])
+	}
+}
+
+// containsIndicator returns true if the given indicator string is in the slice.
+func containsIndicator(indicators []string, target string) bool {
+	for _, ind := range indicators {
+		if ind == target {
+			return true
+		}
+	}
+	return false
+}
