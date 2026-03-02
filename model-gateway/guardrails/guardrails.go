@@ -10,17 +10,19 @@ import (
 	mg "github.com/DiniMuhd7/openguard/model-gateway/interfaces"
 )
 
-// Pipeline composes a Sanitizer and a Validator for use in the model gateway.
+// Pipeline composes a Sanitizer, Validator, and CodeScanner for use in the model gateway.
 type Pipeline struct {
-	sanitizer *Sanitizer
-	validator *Validator
+	sanitizer   *Sanitizer
+	validator   *Validator
+	codeScanner *CodeScanner
 }
 
 // NewPipeline constructs a Pipeline with the given sanitizer and validator configs.
 func NewPipeline(sanitizerCfg SanitizerConfig, validatorCfg ValidatorConfig) *Pipeline {
 	return &Pipeline{
-		sanitizer: NewSanitizer(sanitizerCfg),
-		validator: NewValidator(validatorCfg),
+		sanitizer:   NewSanitizer(sanitizerCfg),
+		validator:   NewValidator(validatorCfg),
+		codeScanner: NewCodeScanner(),
 	}
 }
 
