@@ -110,6 +110,29 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Incident action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
+
+	// Serve the embedded React console for all other paths.
+	// A custom handler falls back to index.html so React-Router
+	// client-side navigation works correctly.
+	uiHandler := uiFileSystem()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Try to serve the exact static asset first.
+		path := r.URL.Path
+		if path == "/" || path == "" {
+			path = "/index.html"
+		}
+		// For asset files (js/css/svg/png), serve directly.
+		f, err := uiFiles.Open("ui" + path)
+		if err == nil {
+			f.Close()
+			uiHandler.ServeHTTP(w, r)
+			return
+		}
+		// Fallback: serve index.html for client-side routes.
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		uiHandler.ServeHTTP(w, r2)
+	})
 }
 
 // handleHealth responds to GET /health with a 200 OK.

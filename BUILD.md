@@ -10,9 +10,41 @@ Step-by-step instructions to install prerequisites, clone, build, and run OpenGu
 |---|---|---|---|---|
 | **Git** | Latest | ✅ | ✅ | ✅ |
 | **Go** | 1.24+ | ✅ | ✅ | ✅ |
+| **Node.js** | 18+ | ✅ | ✅ | ✅ |
 | **NATS Server** | 2.10+ | ✅ | ✅ | ✅ |
 | **Docker** (optional) | Latest | ✅ | ✅ | ✅ |
 | **Make** (optional) | Latest | via Chocolatey | built-in | built-in |
+
+---
+
+## 🖥️ Frontend (Console UI)
+
+The console UI is a React + TypeScript single-page application built with [Vite](https://vitejs.dev/).  
+The compiled static assets are embedded directly into the Go binary at build time via `go:embed`.
+
+### Build the Frontend
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+This outputs the compiled assets to `services/console-api/ui/`, where they are embedded by the Go build.
+
+> ⚠️ **You must build the frontend before building the Go backend** (or commit the built `services/console-api/ui/` directory).
+
+### Frontend Development Server
+
+To iterate on the UI with hot-reload while running the backend on `:8080`:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dev server starts on `http://localhost:5173` and proxies `/api` and `/health` requests to `http://localhost:8080`.
 
 ---
 
