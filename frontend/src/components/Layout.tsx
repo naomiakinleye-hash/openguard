@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import './Layout.css';
 
 const NAV = [
@@ -10,6 +11,14 @@ const NAV = [
 ];
 
 export default function Layout() {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+
+  function handleLogout() {
+    logout();
+    navigate('/login');
+  }
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -32,7 +41,12 @@ export default function Layout() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <span className="sidebar-footer-text">DSHub Ltd.</span>
+          <div className="sidebar-user">
+            <span className="sidebar-user-badge">Operator</span>
+          </div>
+          <button className="logout-btn" onClick={handleLogout}>
+            🚪 Logout
+          </button>
         </div>
       </aside>
       <main className="main-content">

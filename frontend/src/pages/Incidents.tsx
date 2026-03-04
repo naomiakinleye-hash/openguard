@@ -1,16 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, type Incident } from '../api';
+import { useInterval } from '../hooks/useInterval';
+import { useToast } from '../contexts/ToastContext';
+import Pagination from '../components/Pagination';
+
+const PAGE_SIZE = 50;
+const TIERS = ['All', 'T0', 'T1', 'T2', 'T3', 'T4'] as const;
 
 export default function Incidents() {
+  const { addToast } = useToast();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [actionMsg, setActionMsg] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
-  useEffect(() => {
-    api.incidents()
+  // Filter state
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterTier, setFilterTier] = useState('All');
+
+  const fetchIncidents = useCallback(() => {
+    api.incidents(page)
       .then((res) => {
         setIncidents(res.incidents);
         setTotal(res.total);
@@ -19,20 +31,28 @@ export default function Incidents() {
         setError(err instanceof Error ? err.message : String(err)),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
+
+  useEffect(() => { fetchIncidents(); }, [fetchIncidents]);
+  useInterval(fetchIncidents, 30000);
 
   async function handleAction(id: string, action: 'approve' | 'deny' | 'override') {
     setBusy(`${id}:${action}`);
-    setActionMsg('');
     try {
       const res = await api.incidentAction(id, action);
-      setActionMsg(`Incident ${res.incident_id}: ${res.action} — ${res.status}`);
+      addToast(`Incident ${res.incident_id}: ${res.action} — ${res.status}`, 'success');
     } catch (err: unknown) {
-      setActionMsg(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      addToast(`Error: ${err instanceof Error ? err.message : String(err)}`, 'error');
     } finally {
       setBusy(null);
     }
   }
+
+  const filtered = incidents.filter((inc) => {
+    if (filterStatus && !(inc.status ?? '').toLowerCase().includes(filterStatus.toLowerCase())) return false;
+    if (filterTier !== 'All' && inc.tier !== parseInt(filterTier.slice(1))) return false;
+    return true;
+  });
 
   return (
     <div>
@@ -42,13 +62,32 @@ export default function Incidents() {
       </div>
 
       {error && <div className="error-msg">⚠️ {error}</div>}
-      {actionMsg && <div className="card" style={{ marginBottom: '1rem', color: '#a3e635' }}>{actionMsg}</div>}
+
+      <div className="filter-bar">
+        <input
+          type="text"
+          placeholder="Status…"
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+        />
+        <select
+          value={filterTier}
+          onChange={(e) => setFilterTier(e.target.value)}
+        >
+          {TIERS.map((t) => <option key={t}>{t}</option>)}
+        </select>
+        {(filterStatus || filterTier !== 'All') && (
+          <button className="btn-secondary" onClick={() => { setFilterStatus(''); setFilterTier('All'); }}>
+            Clear
+          </button>
+        )}
+      </div>
 
       <div className="table-card">
         <div className="table-header">All Incidents</div>
         {loading ? (
           <div className="loading">Loading…</div>
-        ) : incidents.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="empty-state">No active incidents. The system will surface incidents here when detection thresholds are exceeded.</div>
         ) : (
           <table>
@@ -64,9 +103,9 @@ export default function Incidents() {
               </tr>
             </thead>
             <tbody>
-              {incidents.map((inc) => (
+              {filtered.map((inc) => (
                 <tr key={inc.id}>
-                  <td><code>{inc.id}</code></td>
+                  <td><code><Link to={`/incidents/${inc.id}`}>{inc.id}</Link></code></td>
                   <td>{inc.type ?? '—'}</td>
                   <td>
                     {inc.tier !== undefined ? (
@@ -107,6 +146,8 @@ export default function Incidents() {
           </table>
         )}
       </div>
+
+      <Pagination page={page} total={total} pageSize={PAGE_SIZE} onPageChange={setPage} />
     </div>
   );
 }

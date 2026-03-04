@@ -1,73 +1,64 @@
-# React + TypeScript + Vite
+# OpenGuard v5 — Security Operations Console
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React + TypeScript + Vite single-page application that provides the operator interface for the OpenGuard v5 platform.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Dashboard** — live stat cards, tier breakdown bar charts, risk score distribution, and recent events/incidents tables with auto-refresh every 30 seconds
+- **Events** — full events table with type/tier/source filtering, pagination (50 per page), and 30-second auto-refresh
+- **Incidents** — incidents table with status/tier filtering, pagination, action buttons (Approve / Deny / Override), 30-second auto-refresh, and drill-down detail view
+- **Audit Log** — immutable SHA-256 chained audit ledger with event ID filtering
+- **Sensors** — sensor adapter cards with configuration tables
+- **Authentication** — JWT-based login with protected routes and logout
+- **Toast notifications** — success/error/info/warning toasts with auto-dismiss after 5 seconds
+- **404 page** — catch-all not-found route
 
-## React Compiler
+## Development Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+# Install dependencies
+npm install
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Start the dev server (proxies /api and /health to localhost:8080)
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Build
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+The build output is placed in `../services/console-api/ui` so the Go binary can embed it.
+
+## Tests
+
+```bash
+# Run all tests once
+npm test
+
+# Watch mode
+npm run test:watch
+
+# UI mode
+npm run test:ui
+```
+
+## Lint
+
+```bash
+npm run lint
+```
+
+## Colour Palette
+
+| Token | Hex |
+|-------|-----|
+| Background | `#0f172a` |
+| Surface | `#1e293b` |
+| Border | `#334155` |
+| Muted | `#64748b` |
+| Subtle | `#94a3b8` |
+| Primary | `#60a5fa` |
+| Foreground | `#f1f5f9` |
+

@@ -23,7 +23,21 @@ async function post<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
+}
+
 // ─── Response shapes ─────────────────────────────────────────────────────────
+
+export interface LoginResponse {
+  token: string;
+}
 
 export interface HealthResponse {
   status: string;
@@ -96,15 +110,20 @@ export interface SensorsResponse {
   sensors: SensorInfo[];
 }
 
+export type IncidentDetailResponse = Incident;
+
 // ─── API functions ───────────────────────────────────────────────────────────
 
 export const api = {
   health: () => get<HealthResponse>('/health'),
-  events: () => get<EventsResponse>('/api/v1/events'),
-  incidents: () => get<IncidentsResponse>('/api/v1/incidents'),
+  events: (page?: number) => get<EventsResponse>(`/api/v1/events${page !== undefined ? `?page=${page}` : ''}`),
+  incidents: (page?: number) => get<IncidentsResponse>(`/api/v1/incidents${page !== undefined ? `?page=${page}` : ''}`),
+  incident: (id: string) => get<IncidentDetailResponse>(`/api/v1/incidents/${encodeURIComponent(id)}`),
   audit: (eventId?: string) =>
     get<AuditResponse>(`/api/v1/audit${eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''}`),
   incidentAction: (id: string, action: 'approve' | 'deny' | 'override') =>
     post<ActionResponse>(`/api/v1/incidents/${encodeURIComponent(id)}/${action}`),
   sensors: () => get<SensorsResponse>('/api/v1/sensors'),
+  login: (username: string, password: string) =>
+    postJSON<LoginResponse>('/api/v1/login', { username, password }),
 };
