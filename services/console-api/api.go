@@ -107,6 +107,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	mux.HandleFunc("/api/v1/incidents", s.handleIncidents)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
+	mux.HandleFunc("/api/v1/sensors", s.handleSensors)
 
 	// Incident action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
@@ -218,6 +219,117 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"entries": entries})
+}
+
+// handleSensors handles GET /api/v1/sensors, returning metadata for all
+// OpenGuard sensor adapters (HostGuard, AgentGuard, CommsGuard).
+func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type sensorInfo struct {
+		ID          string                 `json:"id"`
+		Name        string                 `json:"name"`
+		Description string                 `json:"description"`
+		ListenAddr  string                 `json:"listen_addr"`
+		Subsystems  []string               `json:"subsystems"`
+		Config      map[string]interface{} `json:"config"`
+	}
+
+	sensors := []sensorInfo{
+		{
+			ID:          "hostguard",
+			Name:        "HostGuard",
+			Description: "Cross-platform host sensor that monitors OS-level activity for threats and anomalies.",
+			ListenAddr:  "N/A (publishes via NATS)",
+			Subsystems: []string{
+				"process",
+				"realtime_process",
+				"file_io",
+				"hidden_process",
+				"systemd",
+				"cron",
+				"network",
+				"resource",
+				"kernel_module",
+				"session",
+				"dns",
+				"ipc",
+				"container",
+				"usb",
+				"ebpf_syscall",
+				"cloud_metadata",
+				"firmware",
+			},
+			Config: map[string]interface{}{
+				"nats_topic":              "openguard.hostguard.raw",
+				"poll_interval":           "5s",
+				"hidden_scan_interval":    "60s",
+				"cpu_percent_high":        90.0,
+				"memory_mb_high":          2048.0,
+				"new_process_burst":       20,
+				"sensitive_path_prefixes": []string{"/etc/passwd", "/etc/shadow", "/etc/sudoers", "/root", "/root/.ssh", "/boot"},
+				"allowed_dns_resolvers":   []string{"8.8.8.8", "1.1.1.1", "8.8.4.4", "9.9.9.9", "208.67.222.222"},
+			},
+		},
+		{
+			ID:          "agentguard",
+			Name:        "AgentGuard",
+			Description: "AI agent action interception sensor that enforces policy compliance and manages agent lifecycles.",
+			ListenAddr:  ":8095",
+			Subsystems: []string{
+				"action_interception",
+				"agent_registry",
+				"policy_compliance",
+				"suspension",
+				"quarantine",
+			},
+			Config: map[string]interface{}{
+				"nats_topic":  "openguard.agentguard.raw",
+				"listen_addr": ":8095",
+				"routes": []string{
+					"POST /agent/action",
+					"POST /agent/register",
+					"GET  /agent/list",
+					"GET  /agent/status/{agent_id}",
+					"POST /agent/unsuspend/{agent_id}",
+				},
+			},
+		},
+		{
+			ID:          "commsguard",
+			Name:        "CommsGuard",
+			Description: "Multi-channel communications sensor that aggregates webhooks from messaging platforms and detects threats.",
+			ListenAddr:  ":8090",
+			Subsystems: []string{
+				"whatsapp",
+				"telegram",
+				"messenger",
+				"twilio_sms",
+				"twilio_voice",
+				"twitter",
+			},
+			Config: map[string]interface{}{
+				"nats_topic":              "openguard.commsguard.raw",
+				"listen_addr":             ":8090",
+				"bulk_message_threshold":  20,
+				"bulk_message_window":     "60s",
+				"enable_content_analysis": true,
+				"webhook_routes": []string{
+					"/whatsapp/webhook",
+					"/telegram/webhook",
+					"/messenger/webhook",
+					"/twilio/sms",
+					"/twilio/voice",
+					"/twitter/webhook",
+				},
+			},
+		},
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"sensors": sensors})
 }
 
 // authMiddleware validates JWT Bearer tokens on all non-health endpoints.

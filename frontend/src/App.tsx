@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Events from './pages/Events';
 import Incidents from './pages/Incidents';
 import AuditLog from './pages/AuditLog';
+import Sensors from './pages/Sensors';
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="events" element={<Events />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="audit" element={<AuditLog />} />
+          <Route path="sensors" element={<Sensors />} />
         </Route>
       </Routes>
     </BrowserRouter>

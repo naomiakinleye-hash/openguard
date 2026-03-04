@@ -6,6 +6,7 @@ const NAV = [
   { to: '/events', label: '📡 Events' },
   { to: '/incidents', label: '🚨 Incidents' },
   { to: '/audit', label: '📋 Audit Log' },
+  { to: '/sensors', label: '🔬 Sensors' },
 ];
 
 export default function Layout() {

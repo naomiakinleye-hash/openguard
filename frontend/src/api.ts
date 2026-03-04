@@ -83,6 +83,19 @@ export interface ActionResponse {
   status: string;
 }
 
+export interface SensorInfo {
+  id: string;
+  name: string;
+  description: string;
+  listen_addr: string;
+  subsystems: string[];
+  config: Record<string, unknown>;
+}
+
+export interface SensorsResponse {
+  sensors: SensorInfo[];
+}
+
 // ─── API functions ───────────────────────────────────────────────────────────
 
 export const api = {
@@ -93,4 +106,5 @@ export const api = {
     get<AuditResponse>(`/api/v1/audit${eventId ? `?event_id=${encodeURIComponent(eventId)}` : ''}`),
   incidentAction: (id: string, action: 'approve' | 'deny' | 'override') =>
     post<ActionResponse>(`/api/v1/incidents/${encodeURIComponent(id)}/${action}`),
+  sensors: () => get<SensorsResponse>('/api/v1/sensors'),
 };
