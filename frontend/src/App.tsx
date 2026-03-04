@@ -10,6 +10,7 @@ import Incidents from './pages/Incidents';
 import IncidentDetail from './pages/IncidentDetail';
 import AuditLog from './pages/AuditLog';
 import Sensors from './pages/Sensors';
+import ModelSettings from './pages/ModelSettings';
 import Login from './pages/Login';
 import NotFound from './pages/NotFound';
 
@@ -29,6 +30,7 @@ export default function App() {
                 <Route path="incidents/:id" element={<IncidentDetail />} />
                 <Route path="audit" element={<AuditLog />} />
                 <Route path="sensors" element={<Sensors />} />
+                <Route path="models" element={<ModelSettings />} />
               </Route>
             </Route>
             <Route path="*" element={<NotFound />} />

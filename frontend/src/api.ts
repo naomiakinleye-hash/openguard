@@ -110,6 +110,21 @@ export interface SensorsResponse {
   sensors: SensorInfo[];
 }
 
+export interface ModelProvider {
+  id: string;
+  name: string;
+  available: boolean;
+}
+
+export interface ModelsResponse {
+  active: string;
+  providers: ModelProvider[];
+}
+
+export interface SetActiveModelResponse {
+  active: string;
+}
+
 export type IncidentDetailResponse = Incident;
 
 // ─── API functions ───────────────────────────────────────────────────────────
@@ -124,6 +139,9 @@ export const api = {
   incidentAction: (id: string, action: 'approve' | 'deny' | 'override') =>
     post<ActionResponse>(`/api/v1/incidents/${encodeURIComponent(id)}/${action}`),
   sensors: () => get<SensorsResponse>('/api/v1/sensors'),
+  models: () => get<ModelsResponse>('/api/v1/models'),
+  setActiveModel: (provider: string) =>
+    postJSON<SetActiveModelResponse>('/api/v1/models/active', { provider }),
   login: (username: string, password: string) =>
     postJSON<LoginResponse>('/api/v1/login', { username, password }),
 };

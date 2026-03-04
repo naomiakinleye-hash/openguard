@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
@@ -54,6 +55,9 @@ type Server struct {
 
 	// credentials: username → bcrypt hash
 	credentials map[string][]byte
+
+	// activeProvider holds the currently selected AI model provider.
+	activeProvider atomic.Value
 }
 
 // NewServer constructs a new console API Server.
@@ -92,7 +96,14 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 	}
 	creds := map[string][]byte{adminUser: hashBytes}
 
-	return &Server{
+	// Determine the initial active provider from env, defaulting to openai-codex.
+	// Set OPENGUARD_PROVIDER to override the default at startup (e.g. "anthropic-claude").
+	provider := os.Getenv("OPENGUARD_PROVIDER")
+	if provider == "" {
+		provider = "openai-codex"
+	}
+
+	s := &Server{
 		cfg:             cfg,
 		ledger:          ledger,
 		events:          events,
@@ -103,6 +114,8 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		requestDuration: reqDuration,
 		credentials:     creds,
 	}
+	s.activeProvider.Store(provider)
+	return s
 }
 
 // responseWriter wraps http.ResponseWriter to capture the HTTP status code.
@@ -158,6 +171,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/incidents", s.handleIncidents)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/sensors", s.handleSensors)
+	mux.HandleFunc("/api/v1/models", s.handleModels)
+	mux.HandleFunc("/api/v1/models/active", s.handleModelsActive)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
@@ -503,6 +518,76 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sensors": sensors})
+}
+
+// modelProvider describes an available AI model provider.
+type modelProvider struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+}
+
+// knownProviders lists all supported AI model providers and their env key vars.
+var knownProviders = []struct {
+	id     string
+	name   string
+	envKey string
+}{
+	{"openai-codex", "OpenAI (GPT-4o)", "OPENAI_API_KEY"},
+	{"anthropic-claude", "Anthropic (Claude)", "ANTHROPIC_API_KEY"},
+	{"google-gemini", "Google (Gemini 1.5 Pro)", "GEMINI_API_KEY"},
+}
+
+// handleModels handles GET /api/v1/models.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	active, _ := s.activeProvider.Load().(string)
+	providers := make([]modelProvider, 0, len(knownProviders))
+	for _, p := range knownProviders {
+		providers = append(providers, modelProvider{
+			ID:        p.id,
+			Name:      p.name,
+			Available: os.Getenv(p.envKey) != "",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"active":    active,
+		"providers": providers,
+	})
+}
+
+// isValidProvider reports whether id matches one of the known provider IDs.
+func isValidProvider(id string) bool {
+	for _, p := range knownProviders {
+		if p.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+// handleModelsActive handles POST /api/v1/models/active.
+func (s *Server) handleModelsActive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Provider == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider is required"})
+		return
+	}
+	if !isValidProvider(req.Provider) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown provider"})
+		return
+	}
+	s.activeProvider.Store(req.Provider)
+	writeJSON(w, http.StatusOK, map[string]string{"active": req.Provider})
 }
 
 // corsMiddleware adds CORS headers to every response and handles OPTIONS preflight.
