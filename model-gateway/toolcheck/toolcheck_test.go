@@ -52,15 +52,21 @@ func TestCheck_DisallowedTool(t *testing.T) {
 }
 
 func TestCheck_NoPolicy_PermitsAll(t *testing.T) {
-	checker := newTestChecker(t, &PolicyConfig{
-		Agents: []AgentToolPolicy{
-			{ID: "agent-finance", ApprovedTools: []string{"read_database"}},
+	checker, err := New(Config{
+		Policies: &PolicyConfig{
+			Agents: []AgentToolPolicy{
+				{ID: "agent-finance", ApprovedTools: []string{"read_database"}},
+			},
 		},
-	})
+		AllowUnregisteredAgents: true,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 
-	// agent-unknown has no policy entry → should permit all tools.
+	// agent-unknown has no policy entry and AllowUnregisteredAgents=true → should permit all tools.
 	if err := checker.Check("agent-unknown", []string{"any_tool", "another_tool"}); err != nil {
-		t.Fatalf("expected no error for agent with no policy, got %v", err)
+		t.Fatalf("expected no error for agent with no policy when AllowUnregisteredAgents=true, got %v", err)
 	}
 }
 
@@ -78,9 +84,14 @@ func TestCheck_EmptyToolCalls(t *testing.T) {
 
 func TestCheck_NilPolicies(t *testing.T) {
 	checker := newTestChecker(t, nil)
-	// No policies configured — all agents permit all tools.
-	if err := checker.Check("agent-x", []string{"any_tool"}); err != nil {
-		t.Fatalf("expected no error with nil policies, got %v", err)
+	// No policies configured and AllowUnregisteredAgents=false (default) —
+	// deny all tool calls for unknown agents (fail-secure).
+	err := checker.Check("agent-x", []string{"any_tool"})
+	if err == nil {
+		t.Fatal("expected error for unknown agent with nil policies (fail-secure default)")
+	}
+	if !IsToolViolation(err) {
+		t.Fatalf("expected ToolViolation, got %T: %v", err, err)
 	}
 }
 
@@ -113,5 +124,39 @@ func TestNew_MissingFile(t *testing.T) {
 	_, err := New(Config{PolicyPath: "/nonexistent/path/agent-tools.yaml"}, zap.NewNop())
 	if err == nil {
 		t.Fatal("expected error for missing policy file")
+	}
+}
+
+func TestCheck_UnknownAgent_DenyByDefault(t *testing.T) {
+	checker := newTestChecker(t, &PolicyConfig{
+		Agents: []AgentToolPolicy{
+			{ID: "agent-finance", ApprovedTools: []string{"read_database"}},
+		},
+	})
+	// AllowUnregisteredAgents defaults to false → unknown agent must be denied.
+	err := checker.Check("agent-unknown", []string{"any_tool"})
+	if err == nil {
+		t.Fatal("expected ToolViolation for unknown agent (fail-secure default)")
+	}
+	if !IsToolViolation(err) {
+		t.Fatalf("expected ToolViolation, got %T: %v", err, err)
+	}
+}
+
+func TestCheck_UnknownAgent_AllowWithFlag(t *testing.T) {
+	checker, err := New(Config{
+		Policies: &PolicyConfig{
+			Agents: []AgentToolPolicy{
+				{ID: "agent-finance", ApprovedTools: []string{"read_database"}},
+			},
+		},
+		AllowUnregisteredAgents: true,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	// AllowUnregisteredAgents=true → unknown agent is permitted all tools.
+	if err := checker.Check("agent-unknown", []string{"any_tool", "another_tool"}); err != nil {
+		t.Fatalf("expected no error when AllowUnregisteredAgents=true, got %v", err)
 	}
 }

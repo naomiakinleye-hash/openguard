@@ -15,10 +15,29 @@ import (
 	policyengine "github.com/DiniMuhd7/openguard/services/policy-engine"
 )
 
+// IncidentSink receives new incidents created by the orchestrator for persistence.
+type IncidentSink interface {
+	Add(incident *OrchestratorIncident)
+}
+
+// OrchestratorIncident is a minimal incident representation used by the orchestrator.
+type OrchestratorIncident struct {
+	ID          string  `json:"id"`
+	EventID     string  `json:"event_id"`
+	Type        string  `json:"type,omitempty"`
+	Tier        int     `json:"tier,omitempty"`
+	Status      string  `json:"status"`
+	CreatedAt   string  `json:"created_at"`
+	Description string  `json:"description,omitempty"`
+	RiskScore   float64 `json:"risk_score,omitempty"`
+}
+
 // Config holds configuration for the Orchestrator.
 type Config struct {
 	// ApprovalTimeout is how long to wait for human approval before escalating.
 	ApprovalTimeout time.Duration
+	// IncidentSink receives new incidents when human approval is requested.
+	IncidentSink IncidentSink
 }
 
 // ApprovalRequest represents a pending human approval request.
@@ -140,6 +159,18 @@ func (o *Orchestrator) requestApproval(ctx context.Context, incidentID, proposed
 	o.mu.Lock()
 	o.pendingApprovals[incidentID] = req
 	o.mu.Unlock()
+
+	// Notify the incident sink when approval is requested.
+	if o.cfg.IncidentSink != nil {
+		o.cfg.IncidentSink.Add(&OrchestratorIncident{
+			ID:          incidentID,
+			EventID:     incidentID,
+			Type:        "approval_required",
+			Status:      "pending",
+			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+			Description: proposedAction,
+		})
+	}
 
 	o.logger.Info("orchestrator: approval requested",
 		zap.String("incident_id", incidentID),

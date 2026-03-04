@@ -36,6 +36,9 @@ type Config struct {
 	// Policies provides an inline policy configuration.
 	// If PolicyPath is also set, policies loaded from the file take precedence.
 	Policies *PolicyConfig
+	// AllowUnregisteredAgents controls whether agents with no policy entry are
+	// permitted all tool calls. Defaults to false (fail-secure: deny unknown agents).
+	AllowUnregisteredAgents bool
 }
 
 // ToolViolation describes a tool that was blocked.
@@ -53,8 +56,9 @@ func (v *ToolViolation) Error() string {
 
 // ToolIntentChecker validates proposed tool calls against a per-agent allowlist.
 type ToolIntentChecker struct {
-	allowlists map[string]map[string]struct{} // agentID → set of approved tool names
-	logger     *zap.Logger
+	allowlists              map[string]map[string]struct{} // agentID → set of approved tool names
+	allowUnregisteredAgents bool
+	logger                  *zap.Logger
 }
 
 // New constructs a ToolIntentChecker from the provided Config.
@@ -77,8 +81,9 @@ func New(cfg Config, logger *zap.Logger) (*ToolIntentChecker, error) {
 	}
 
 	checker := &ToolIntentChecker{
-		allowlists: make(map[string]map[string]struct{}),
-		logger:     logger,
+		allowlists:              make(map[string]map[string]struct{}),
+		allowUnregisteredAgents: cfg.AllowUnregisteredAgents,
+		logger:                  logger,
 	}
 
 	if policyCfg != nil {
@@ -97,13 +102,23 @@ func New(cfg Config, logger *zap.Logger) (*ToolIntentChecker, error) {
 // Check validates that every tool in toolCalls is approved for agentID.
 // If any tool is not in the allowlist, it returns a *ToolViolation error and
 // the caller should emit a tool_use_outside_scope event.
-// If agentID has no policy entry, all tool calls are permitted.
+// If agentID has no policy entry and AllowUnregisteredAgents is false (default),
+// all tool calls are denied (fail-secure). Set AllowUnregisteredAgents: true in
+// Config to restore the legacy allow-all behaviour for development.
 func (c *ToolIntentChecker) Check(agentID string, toolCalls []string) error {
 	approved, hasPolicy := c.allowlists[agentID]
 	if !hasPolicy {
-		// No policy configured for this agent — permit all.
-		c.logger.Debug("toolcheck: no policy for agent, permitting all tools",
+		if c.allowUnregisteredAgents {
+			c.logger.Debug("toolcheck: no policy for agent, permitting all tools (allow-unregistered enabled)",
+				zap.String("agent_id", agentID))
+			return nil
+		}
+		// Fail-secure: deny all tool calls for agents with no policy.
+		c.logger.Warn("toolcheck: no policy for agent, denying all tools (fail-secure)",
 			zap.String("agent_id", agentID))
+		if len(toolCalls) > 0 {
+			return &ToolViolation{AgentID: agentID, ToolName: toolCalls[0]}
+		}
 		return nil
 	}
 

@@ -11,6 +11,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// EventSink receives detected events for persistence.
+type EventSink interface {
+	Add(event map[string]interface{})
+}
+
 // Config holds configuration for the detection Service.
 type Config struct {
 	// RulesDir is the path to the detection rules directory.
@@ -18,6 +23,8 @@ type Config struct {
 	// ModelAssistThreshold is the minimum risk score at which model assistance
 	// is requested (default: 40.0 — medium risk and above).
 	ModelAssistThreshold float64
+	// Sink is an optional EventSink that receives detected events for persistence.
+	Sink EventSink
 }
 
 // RiskComponents holds the four components of the composite risk score.
@@ -105,6 +112,10 @@ func (s *Service) HandleEvent(ctx context.Context, event map[string]interface{})
 	event["risk_score"] = result.RiskScore
 	event["tier"] = result.Tier
 	event["severity"] = result.Severity
+	// Forward enriched event to the sink if configured.
+	if s.cfg.Sink != nil {
+		s.cfg.Sink.Add(event)
+	}
 	return nil
 }
 
