@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type HealthResponse, type EventsResponse, type IncidentsResponse } from '../api';
+import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event } from '../api';
 import { useInterval } from '../hooks/useInterval';
+import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
+
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 
 const TIER_COLORS: Record<number, string> = {
   0: '#334155',
@@ -25,6 +28,7 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState<IncidentsResponse | null>(null);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [liveCount, setLiveCount] = useState(0);
 
   const fetchAll = useCallback(() => {
     Promise.all([api.health(), api.events(), api.incidents()])
@@ -40,7 +44,37 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
-  useInterval(fetchAll, 30000);
+  // Keep a REST polling fallback at 5 s in case the SSE connection drops.
+  useInterval(fetchAll, 5000);
+
+  // Build the SSE URL, passing the JWT as a query param (EventSource can't
+  // send custom headers, so the backend accepts ?token= as a fallback).
+  const token = localStorage.getItem('og_token') ?? '';
+  const sseUrl = useMemo(
+    () => (token ? `${BASE}/api/v1/events/stream?token=${encodeURIComponent(token)}` : null),
+    [token],
+  );
+
+  // Handle live events pushed over SSE — prepend to the current list so they
+  // show up immediately without waiting for the next poll cycle.
+  const handleLiveEvent = useCallback((data: unknown) => {
+    const event = data as Event;
+    setEvents((prev) => {
+      if (!prev) return prev;
+      // Deduplicate by id in case the REST poll also returns the same event.
+      const exists = prev.events.some((e) => e.id && e.id === event.id);
+      if (exists) return prev;
+      return {
+        ...prev,
+        events: [event, ...prev.events],
+        total: prev.total + 1,
+      };
+    });
+    setLastUpdated(new Date());
+    setLiveCount((n) => n + 1);
+  }, []);
+
+  useSSE(sseUrl, handleLiveEvent);
 
   const tierCounts = [0, 1, 2, 3, 4].map((tier) => ({
     tier,
@@ -63,8 +97,19 @@ export default function Dashboard() {
           <h2>Dashboard</h2>
           <p>OpenGuard v5 — Security Operations Overview</p>
           {lastUpdated && (
-            <p style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>
+            <p style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               Last updated: {lastUpdated.toLocaleTimeString()}
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.25rem',
+                fontSize: '0.7rem', fontWeight: 600, color: '#16a34a',
+                border: '1px solid #16a34a', borderRadius: '4px', padding: '1px 6px',
+              }}>
+                <span style={{
+                  width: '6px', height: '6px', borderRadius: '50%',
+                  background: '#16a34a', animation: 'pulse 2s infinite',
+                }} />
+                LIVE{liveCount > 0 ? ` +${liveCount}` : ''}
+              </span>
             </p>
           )}
         </div>

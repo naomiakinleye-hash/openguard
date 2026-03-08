@@ -18,3 +18,11 @@ func NewSensor(cfg common.Config, logger *zap.Logger) (common.Sensor, error) {
 	}
 	return darwin.NewSensor(cfg, publisher, logger), nil
 }
+
+// NewSensorDirect constructs a DarwinSensor that bypasses NATS and delivers events
+// directly to the provided handler function. This enables in-process operation
+// without a running NATS server.
+func NewSensorDirect(cfg common.Config, handler func([]byte) error, logger *zap.Logger) (common.Sensor, error) {
+	publisher := common.NewDirectPublisher(handler, cfg.RawEventTopic, logger)
+	return darwin.NewSensor(cfg, publisher, logger), nil
+}

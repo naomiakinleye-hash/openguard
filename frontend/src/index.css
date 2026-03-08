@@ -494,3 +494,8 @@ button:disabled {
   margin: 0;
   align-self: center;
 }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}

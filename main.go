@@ -8,6 +8,7 @@ import (
 "syscall"
 "time"
 
+"github.com/joho/godotenv"
 "go.opentelemetry.io/otel"
 "go.opentelemetry.io/otel/sdk/trace"
 "go.uber.org/zap"
@@ -18,6 +19,9 @@ auditled "github.com/DiniMuhd7/openguard/services/audit-ledger"
 "github.com/DiniMuhd7/openguard/services/ingest"
 orchestrator "github.com/DiniMuhd7/openguard/services/response-orchestrator"
 policyengine "github.com/DiniMuhd7/openguard/services/policy-engine"
+
+hostguard "github.com/DiniMuhd7/openguard/adapters/hostguard"
+hostguardcommon "github.com/DiniMuhd7/openguard/adapters/hostguard/common"
 )
 
 // incidentSinkAdapter adapts consoleapi.IncidentStore to the orchestrator.IncidentSink interface.
@@ -39,6 +43,10 @@ func (a *incidentSinkAdapter) Add(inc *orchestrator.OrchestratorIncident) {
 }
 
 func main() {
+// Load .env file if present (silently ignored when absent so production
+// deployments that inject env vars directly are unaffected).
+_ = godotenv.Load()
+
 logger, err := zap.NewProduction()
 if err != nil {
 panic("failed to initialize logger: " + err.Error())
@@ -120,6 +128,22 @@ logger.Fatal("failed to start ingest service", zap.Error(err))
 }
 if err := apiServer.Start(ctx); err != nil {
 logger.Fatal("failed to start console API", zap.Error(err))
+}
+
+// Start HostGuard sensor in-process (direct mode — no NATS required).
+// This feeds live host telemetry (processes, resources, network, etc.) directly
+// into the ingest → detect → eventStore pipeline so the dashboard shows real data.
+sensorCfg := hostguardcommon.DefaultConfig()
+hgSensor, hgErr := hostguard.NewSensorDirect(sensorCfg, func(payload []byte) error {
+return ingestSvc.Ingest(context.Background(), payload)
+}, logger)
+if hgErr != nil {
+logger.Warn("hostguard sensor: init failed (running without host telemetry)", zap.Error(hgErr))
+} else if startErr := hgSensor.Start(ctx); startErr != nil {
+logger.Warn("hostguard sensor: start failed (running without host telemetry)", zap.Error(startErr))
+} else {
+defer hgSensor.Stop() //nolint:errcheck
+logger.Info("hostguard sensor: running in-process", zap.String("platform", hgSensor.Platform()))
 }
 
 logger.Info("OpenGuard v5 running",

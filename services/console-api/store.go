@@ -26,6 +26,7 @@ type EventStore struct {
 	mu      sync.RWMutex
 	events  []map[string]interface{}
 	byID    map[string]map[string]interface{}
+	subs    []chan map[string]interface{}
 	counter int
 }
 
@@ -36,8 +37,31 @@ func NewEventStore() *EventStore {
 	}
 }
 
+// Subscribe returns a buffered channel that receives a copy of each event as it
+// is added to the store. Call Unsubscribe to clean up the channel.
+func (s *EventStore) Subscribe() chan map[string]interface{} {
+	ch := make(chan map[string]interface{}, 64)
+	s.mu.Lock()
+	s.subs = append(s.subs, ch)
+	s.mu.Unlock()
+	return ch
+}
+
+// Unsubscribe removes and closes a previously subscribed channel.
+func (s *EventStore) Unsubscribe(ch chan map[string]interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, sub := range s.subs {
+		if sub == ch {
+			s.subs = append(s.subs[:i], s.subs[i+1:]...)
+			close(ch)
+			return
+		}
+	}
+}
+
 // Add appends an event to the store. If the event has no "id" field, one is
-// assigned automatically.
+// assigned automatically. Subscribers are notified asynchronously.
 func (s *EventStore) Add(event map[string]interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -52,6 +76,13 @@ func (s *EventStore) Add(event map[string]interface{}) {
 	}
 	s.events = append(s.events, event)
 	s.byID[id] = event
+	// Notify subscribers — non-blocking so slow readers don't stall ingest.
+	for _, ch := range s.subs {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
 }
 
 // List returns a paginated slice of events and the total count.

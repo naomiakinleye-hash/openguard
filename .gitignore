@@ -18,3 +18,6 @@ Thumbs.db
 
 # Frontend dependencies (not committed; run `npm install` in frontend/)
 frontend/node_modules/
+
+# Local environment — contains secrets, never commit
+.env

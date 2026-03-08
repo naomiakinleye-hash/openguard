@@ -11,6 +11,17 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // SSE stream — disable response buffering so frames arrive immediately.
+      '/api/v1/events/stream': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        // Prevent Vite from buffering the SSE response.
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+          });
+        },
+      },
       '/api': 'http://localhost:8080',
       '/health': 'http://localhost:8080',
     },

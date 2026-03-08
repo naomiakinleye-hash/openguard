@@ -66,6 +66,8 @@ func NewService(cfg Config, handler EventHandler, _ interface{}, logger *zap.Log
 }
 
 // Start begins the ingestion service, connecting to NATS if a URL is configured.
+// When NATS is available it subscribes to all raw event topics so that
+// standalone adapter agents (hostguard-agent, etc.) are consumed automatically.
 func (s *Service) Start(ctx context.Context) error {
 	if s.cfg.NATSUrl != "" {
 		nc, err := nats.Connect(s.cfg.NATSUrl,
@@ -78,6 +80,25 @@ func (s *Service) Start(ctx context.Context) error {
 		} else {
 			s.nc = nc
 			s.logger.Info("ingest: connected to NATS", zap.String("url", s.cfg.NATSUrl))
+			// Subscribe to all raw event topics so agent-published events flow in.
+			topics := []string{
+				"openguard.hostguard.raw",
+				"openguard.agentguard.raw",
+				"openguard.commsguard.raw",
+			}
+			for _, topic := range topics {
+				topic := topic
+				if _, subErr := nc.Subscribe(topic, func(msg *nats.Msg) {
+					if ingestErr := s.Ingest(context.Background(), msg.Data); ingestErr != nil {
+						s.logger.Warn("ingest: process nats message",
+							zap.String("topic", topic), zap.Error(ingestErr))
+					}
+				}); subErr != nil {
+					s.logger.Warn("ingest: subscribe failed",
+						zap.String("topic", topic), zap.Error(subErr))
+				}
+			}
+			s.logger.Info("ingest: subscribed to NATS topics", zap.Strings("topics", topics))
 		}
 	}
 	s.logger.Info("ingest: service started",

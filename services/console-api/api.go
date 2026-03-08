@@ -6,6 +6,7 @@ package consoleapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -167,6 +168,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
+	// SSE stream must be registered before the wildcard /api/v1/events/ route.
+	mux.HandleFunc("/api/v1/events/stream", s.handleEventsStream)
 	mux.HandleFunc("/api/v1/events/", s.handleEvents)
 	mux.HandleFunc("/api/v1/incidents", s.handleIncidents)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
@@ -286,6 +289,59 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		"page":   page,
 		"total":  total,
 	})
+}
+
+// handleEventsStream handles GET /api/v1/events/stream using Server-Sent Events (SSE).
+// The client receives one JSON-encoded event per SSE message as events are ingested.
+// Because EventSource cannot attach custom headers, authentication is accepted via
+// the ?token= query param in addition to the standard Bearer header.
+func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Verify the ResponseWriter supports flushing (required for SSE).
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Set SSE headers.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// Needed when the frontend dev server and API run on different origins.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Subscribe to new events. The channel is closed on unsubscribe.
+	ch := s.events.Subscribe()
+	defer s.events.Unsubscribe(ch)
+
+	enc := json.NewEncoder(w)
+
+	for {
+		select {
+		case event, open := <-ch:
+			if !open {
+				return
+			}
+			if _, err := fmt.Fprint(w, "data: "); err != nil {
+				return
+			}
+			if err := enc.Encode(event); err != nil {
+				return
+			}
+			if _, err := fmt.Fprint(w, "\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // handleIncidents handles GET /api/v1/incidents.
@@ -604,20 +660,30 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware validates JWT Bearer tokens on all non-health/metrics/login endpoints.
+// authMiddleware validates JWT Bearer tokens on all /api/v1/* endpoints except login.
+// Static UI assets (/, /assets/*, /index.html, etc.) are served without authentication
+// so the React app can load and display the login page.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Health, metrics, and login endpoints are unauthenticated.
-		if r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/api/v1/login" {
+		// Health, metrics, login and all non-API paths are unauthenticated.
+		if r.URL.Path == "/health" || r.URL.Path == "/metrics" ||
+			r.URL.Path == "/api/v1/login" || !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		var tokenStr string
+		if strings.HasPrefix(auth, "Bearer ") {
+			tokenStr = strings.TrimPrefix(auth, "Bearer ")
+		} else {
+			// EventSource cannot set custom headers; accept token as a query param
+			// for the SSE stream endpoint as a fallback.
+			tokenStr = r.URL.Query().Get("token")
+		}
+		if tokenStr == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		tokenStr := strings.TrimPrefix(auth, "Bearer ")
 		token, err := jwtv5.Parse(tokenStr, func(t *jwtv5.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwtv5.SigningMethodHMAC); !ok {
 				return nil, jwtv5.ErrSignatureInvalid
