@@ -177,6 +177,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/models", s.handleModels)
 	mux.HandleFunc("/api/v1/models/active", s.handleModelsActive)
 	mux.HandleFunc("/api/v1/system/stats", s.handleSystemStats)
+	mux.HandleFunc("/api/v1/summary", s.handleSummary)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)

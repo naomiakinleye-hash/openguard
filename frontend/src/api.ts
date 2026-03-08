@@ -137,6 +137,24 @@ export interface SystemStats {
   sampled_at: string;
 }
 
+export interface SummaryRequest {
+  total_events: number;
+  total_incidents: number;
+  cpu_util_pct: number;
+  mem_used_pct: number;
+  load_avg_1m: number;
+  top_event_types: { type: string; count: number }[];
+  tier_breakdown: { tier: string; count: number }[];
+  incident_statuses: { status: string; count: number }[];
+}
+
+export interface SummaryResponse {
+  summary: string;
+  provider: string;
+  generated_at: string;
+  cache_hit: boolean;
+}
+
 export type IncidentDetailResponse = Incident;
 
 // ─── API functions ───────────────────────────────────────────────────────────
@@ -155,6 +173,7 @@ export const api = {
   setActiveModel: (provider: string) =>
     postJSON<SetActiveModelResponse>('/api/v1/models/active', { provider }),
   systemStats: () => get<SystemStats>('/api/v1/system/stats'),
+  summary: (body: SummaryRequest) => postJSON<SummaryResponse>('/api/v1/summary', body),
   login: (username: string, password: string) =>
     postJSON<LoginResponse>('/api/v1/login', { username, password }),
 };
