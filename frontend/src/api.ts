@@ -33,6 +33,15 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
+}
+
 // ─── Response shapes ─────────────────────────────────────────────────────────
 
 export interface LoginResponse {
@@ -113,7 +122,8 @@ export interface SensorsResponse {
 export interface ModelProvider {
   id: string;
   name: string;
-  available: boolean;
+  available: boolean;    // true = user has connected this provider
+  uses_oauth: boolean;   // true = OAuth2 sign-in flow; false = API key entry form
 }
 
 export interface ModelsResponse {
@@ -172,6 +182,12 @@ export const api = {
   models: () => get<ModelsResponse>('/api/v1/models'),
   setActiveModel: (provider: string) =>
     postJSON<SetActiveModelResponse>('/api/v1/models/active', { provider }),
+  oauthStart: (provider: string) =>
+    get<{ auth_url: string }>(`/api/v1/models/oauth/start?provider=${encodeURIComponent(provider)}`),
+  saveCredential: (provider: string, credential: string) =>
+    postJSON<{ status: string; provider: string }>('/api/v1/models/credentials', { provider, credential }),
+  deleteCredential: (provider: string) =>
+    del<{ status: string; provider: string }>(`/api/v1/models/credentials?provider=${encodeURIComponent(provider)}`),
   systemStats: () => get<SystemStats>('/api/v1/system/stats'),
   summary: (body: SummaryRequest) => postJSON<SummaryResponse>('/api/v1/summary', body),
   login: (username: string, password: string) =>

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -59,14 +58,19 @@ type SummaryResponse struct {
 	CacheHit     bool   `json:"cache_hit"`
 }
 
-// summaryCache holds a cached response and its expiry.
-type summaryCache struct {
-	mu        sync.Mutex
-	resp      *SummaryResponse
+// summaryCacheEntry holds a cached summary response and its expiry.
+type summaryCacheEntry struct {
+	resp      SummaryResponse
 	expiresAt time.Time
 }
 
-var globalSummaryCache = &summaryCache{}
+// summaryCache is a per-user TTL cache for generated summaries.
+type summaryCache struct {
+	mu      sync.Mutex
+	entries map[string]summaryCacheEntry // key: username
+}
+
+var globalSummaryCache = &summaryCache{entries: make(map[string]summaryCacheEntry)}
 
 // handleSummary handles POST /api/v1/summary.
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -87,14 +91,13 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check cache — use a simple serialisation of the request as the key.
-	cacheKey := fmt.Sprintf("%d|%d|%.1f|%.1f|%.2f",
-		req.TotalEvents, req.TotalIncidents, req.CPUUtilPct, req.MemUsedPct, req.LoadAvg1)
-	_ = cacheKey // key is implicit via the single global slot (TTL-based)
+	username, _ := r.Context().Value(contextKeyActor).(string)
+	activeProvider, _ := s.activeProvider.Load().(string)
 
+	// Check per-user cache.
 	globalSummaryCache.mu.Lock()
-	if globalSummaryCache.resp != nil && time.Now().Before(globalSummaryCache.expiresAt) {
-		cached := *globalSummaryCache.resp
+	if entry, ok := globalSummaryCache.entries[username]; ok && time.Now().Before(entry.expiresAt) {
+		cached := entry.resp
 		cached.CacheHit = true
 		globalSummaryCache.mu.Unlock()
 		writeJSON(w, http.StatusOK, cached)
@@ -102,13 +105,12 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	globalSummaryCache.mu.Unlock()
 
-	activeProvider, _ := s.activeProvider.Load().(string)
-	summary, err := s.generateSummary(r.Context(), activeProvider, req)
+	summary, err := s.generateSummary(r.Context(), username, activeProvider, req)
 	if err != nil {
 		s.logger.Warn("console api: summary generation failed", zap.Error(err))
-		// Return a graceful degraded response rather than an error.
+		// Return a graceful degraded response rather than an HTTP error.
 		writeJSON(w, http.StatusOK, SummaryResponse{
-			Summary:     "AI summary unavailable — configure an API key in Model Settings.",
+			Summary:     "AI summary unavailable — sign in to a model provider in Model Settings.",
 			Provider:    activeProvider,
 			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 			CacheHit:    false,
@@ -124,24 +126,30 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	globalSummaryCache.mu.Lock()
-	globalSummaryCache.resp = &resp
-	globalSummaryCache.expiresAt = time.Now().Add(60 * time.Second)
+	globalSummaryCache.entries[username] = summaryCacheEntry{
+		resp:      resp,
+		expiresAt: time.Now().Add(60 * time.Second),
+	}
 	globalSummaryCache.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// generateSummary builds a prompt and calls the appropriate AI provider.
-func (s *Server) generateSummary(ctx context.Context, provider string, req SummaryRequest) (string, error) {
+// generateSummary retrieves the user's stored credential for the active provider
+// and calls the appropriate AI API.
+func (s *Server) generateSummary(ctx context.Context, username, provider string, req SummaryRequest) (string, error) {
+	credential, err := s.getAccessToken(username, provider)
+	if err != nil {
+		return "", err
+	}
 	prompt := buildSummaryPrompt(req)
-
 	switch provider {
 	case "anthropic-claude":
-		return callClaude(ctx, prompt)
+		return callClaude(ctx, prompt, credential)
 	case "google-gemini":
-		return callGemini(ctx, prompt)
+		return callGemini(ctx, prompt, credential)
 	default: // "openai-codex" and anything else
-		return callOpenAI(ctx, prompt)
+		return callOpenAI(ctx, prompt, credential)
 	}
 }
 
@@ -192,13 +200,13 @@ Incident statuses:
 }
 
 // ── Provider call helpers ─────────────────────────────────────────────────────
-// These are thin, self-contained HTTP callers that read API keys from env so
-// the summary endpoint works even when the full model-gateway binary is absent.
+// Each helper accepts the credential (OAuth2 access token or API key) that was
+// retrieved from the user's stored account — environment variables are no longer
+// used for per-request authentication.
 
-func callOpenAI(ctx context.Context, prompt string) (string, error) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+func callOpenAI(ctx context.Context, prompt, apiKey string) (string, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("OPENAI_API_KEY not set")
+		return "", fmt.Errorf("openai: not connected — sign in via Model Settings")
 	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "gpt-4o",
@@ -240,10 +248,9 @@ func callOpenAI(ctx context.Context, prompt string) (string, error) {
 	return out.Choices[0].Message.Content, nil
 }
 
-func callClaude(ctx context.Context, prompt string) (string, error) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+func callClaude(ctx context.Context, prompt, apiKey string) (string, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("ANTHROPIC_API_KEY not set")
+		return "", fmt.Errorf("anthropic: not connected — sign in via Model Settings")
 	}
 	body, _ := json.Marshal(map[string]interface{}{
 		"model":      "claude-3-5-sonnet-20241022",
@@ -287,26 +294,27 @@ func callClaude(ctx context.Context, prompt string) (string, error) {
 	return "", fmt.Errorf("claude: no text content")
 }
 
-func callGemini(ctx context.Context, prompt string) (string, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY not set")
+func callGemini(ctx context.Context, prompt, accessToken string) (string, error) {
+	if accessToken == "" {
+		return "", fmt.Errorf("google-gemini: not connected — sign in via Model Settings")
 	}
 	model := "gemini-1.5-pro"
-	url := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-		model, apiKey)
+	// OAuth2 authenticated calls use the Authorization header; no ?key= query param.
+	apiURL := fmt.Sprintf(
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent",
+		model)
 	body, _ := json.Marshal(map[string]interface{}{
 		"contents": []map[string]interface{}{
 			{"parts": []map[string]string{{"text": prompt}}},
 		},
 		"generationConfig": map[string]interface{}{"maxOutputTokens": 512},
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {

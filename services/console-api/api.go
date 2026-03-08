@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +60,14 @@ type Server struct {
 
 	// activeProvider holds the currently selected AI model provider.
 	activeProvider atomic.Value
+
+	// userCreds stores per-user, per-provider OAuth2 tokens and API key credentials.
+	// Key format: "username\x00provider" (see credKey in oauth.go). Value: *providerCredential.
+	userCreds sync.Map
+
+	// oauthStates holds in-flight OAuth2 state tokens for CSRF protection.
+	// Key: state string. Value: *oauthState. States expire after 10 minutes.
+	oauthStates sync.Map
 }
 
 // NewServer constructs a new console API Server.
@@ -176,6 +185,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/sensors", s.handleSensors)
 	mux.HandleFunc("/api/v1/models", s.handleModels)
 	mux.HandleFunc("/api/v1/models/active", s.handleModelsActive)
+	mux.HandleFunc("/api/v1/models/oauth/start", s.handleOAuthStart)
+	mux.HandleFunc("/api/v1/models/oauth/callback", s.handleOAuthCallback)
+	mux.HandleFunc("/api/v1/models/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/v1/system/stats", s.handleSystemStats)
 	mux.HandleFunc("/api/v1/summary", s.handleSummary)
 
@@ -582,18 +594,18 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 type modelProvider struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Available bool   `json:"available"`
+	Available bool   `json:"available"` // true when the user has connected this provider
+	UsesOAuth bool   `json:"uses_oauth"` // true when sign-in uses OAuth2 (false = API key form)
 }
 
-// knownProviders lists all supported AI model providers and their env key vars.
+// knownProviders lists all supported AI model providers.
 var knownProviders = []struct {
-	id     string
-	name   string
-	envKey string
+	id   string
+	name string
 }{
-	{"openai-codex", "OpenAI (GPT-4o)", "OPENAI_API_KEY"},
-	{"anthropic-claude", "Anthropic (Claude)", "ANTHROPIC_API_KEY"},
-	{"google-gemini", "Google (Gemini 1.5 Pro)", "GEMINI_API_KEY"},
+	{"openai-codex", "OpenAI (GPT-4o)"},
+	{"anthropic-claude", "Anthropic (Claude)"},
+	{"google-gemini", "Google (Gemini 1.5 Pro)"},
 }
 
 // handleModels handles GET /api/v1/models.
@@ -602,13 +614,15 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	username, _ := r.Context().Value(contextKeyActor).(string)
 	active, _ := s.activeProvider.Load().(string)
 	providers := make([]modelProvider, 0, len(knownProviders))
 	for _, p := range knownProviders {
 		providers = append(providers, modelProvider{
 			ID:        p.id,
 			Name:      p.name,
-			Available: os.Getenv(p.envKey) != "",
+			Available: s.isUserConnected(username, p.id),
+			UsesOAuth: hasOAuth(p.id),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -652,7 +666,7 @@ func (s *Server) handleModelsActive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -669,7 +683,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Health, metrics, login and all non-API paths are unauthenticated.
 		if r.URL.Path == "/health" || r.URL.Path == "/metrics" ||
-			r.URL.Path == "/api/v1/login" || !strings.HasPrefix(r.URL.Path, "/api/") {
+			r.URL.Path == "/api/v1/login" ||
+			r.URL.Path == "/api/v1/models/oauth/callback" || // browser redirect from OAuth2 provider
+			!strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
