@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event } from '../api';
+import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
+import CPUGauge from '../components/CPUGauge';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 
@@ -26,16 +27,18 @@ export default function Dashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [events, setEvents] = useState<EventsResponse | null>(null);
   const [incidents, setIncidents] = useState<IncidentsResponse | null>(null);
+  const [sysStats, setSysStats] = useState<SystemStats | null>(null);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [liveCount, setLiveCount] = useState(0);
 
   const fetchAll = useCallback(() => {
-    Promise.all([api.health(), api.events(), api.incidents()])
-      .then(([h, e, i]) => {
+    Promise.all([api.health(), api.events(), api.incidents(), api.systemStats()])
+      .then(([h, e, i, s]) => {
         setHealth(h);
         setEvents(e);
         setIncidents(i);
+        setSysStats(s);
         setLastUpdated(new Date());
       })
       .catch((err: unknown) =>
@@ -147,6 +150,51 @@ export default function Dashboard() {
             {health ? health.version : '—'}
           </div>
           <div className="stat-label">Platform Version</div>
+        </div>
+      </div>
+
+      {/* ── CPU & Memory utilisation row ─────────────────────────────── */}
+      <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+        {/* CPU utilisation gauge */}
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="section-title" style={{ alignSelf: 'flex-start', marginBottom: '0.25rem' }}>CPU Utilisation Rate</div>
+          <CPUGauge utilPct={sysStats ? sysStats.cpu_util_pct : -1} size={130} />
+          <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+            <span><span style={{ color: '#64748b' }}>Cores </span>{sysStats ? sysStats.cpu_cores : '—'}</span>
+            <span><span style={{ color: '#64748b' }}>Load 1m </span>{sysStats ? sysStats.load_avg_1m.toFixed(2) : '—'}</span>
+            <span><span style={{ color: '#64748b' }}>5m </span>{sysStats ? sysStats.load_avg_5m.toFixed(2) : '—'}</span>
+            <span><span style={{ color: '#64748b' }}>15m </span>{sysStats ? sysStats.load_avg_15m.toFixed(2) : '—'}</span>
+          </div>
+        </div>
+
+        {/* Memory utilisation bar */}
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.75rem' }}>
+          <div className="section-title">Memory Utilisation</div>
+          {sysStats && sysStats.mem_total_mb > 0 ? (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 600 }}>
+                <span>{sysStats.mem_used_pct.toFixed(1)}%</span>
+                <span style={{ color: '#64748b', fontWeight: 400 }}>
+                  {(sysStats.mem_used_mb / 1024).toFixed(1)} GB / {(sysStats.mem_total_mb / 1024).toFixed(1)} GB
+                </span>
+              </div>
+              <div style={{ background: '#0f172a', borderRadius: '6px', height: '12px', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  borderRadius: '6px',
+                  width: `${Math.min(100, sysStats.mem_used_pct)}%`,
+                  background: sysStats.mem_used_pct >= 85 ? '#dc2626' : sysStats.mem_used_pct >= 60 ? '#d97706' : '#16a34a',
+                  transition: 'width 0.6s ease, background 0.4s ease',
+                }} />
+              </div>
+              <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+                <span><span style={{ color: '#64748b' }}>Used </span>{sysStats.mem_used_mb.toFixed(0)} MB</span>
+                <span><span style={{ color: '#64748b' }}>Free </span>{(sysStats.mem_total_mb - sysStats.mem_used_mb).toFixed(0)} MB</span>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: '#475569', fontSize: '0.875rem' }}>Awaiting first sample…</div>
+          )}
         </div>
       </div>
 

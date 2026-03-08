@@ -125,6 +125,18 @@ export interface SetActiveModelResponse {
   active: string;
 }
 
+export interface SystemStats {
+  cpu_util_pct: number;   // 0–100, or -1 if not yet available
+  cpu_cores: number;
+  load_avg_1m: number;
+  load_avg_5m: number;
+  load_avg_15m: number;
+  mem_total_mb: number;
+  mem_used_mb: number;
+  mem_used_pct: number;
+  sampled_at: string;
+}
+
 export type IncidentDetailResponse = Incident;
 
 // ─── API functions ───────────────────────────────────────────────────────────
@@ -142,6 +154,7 @@ export const api = {
   models: () => get<ModelsResponse>('/api/v1/models'),
   setActiveModel: (provider: string) =>
     postJSON<SetActiveModelResponse>('/api/v1/models/active', { provider }),
+  systemStats: () => get<SystemStats>('/api/v1/system/stats'),
   login: (username: string, password: string) =>
     postJSON<LoginResponse>('/api/v1/login', { username, password }),
 };
