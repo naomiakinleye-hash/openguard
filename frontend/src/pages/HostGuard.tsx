@@ -1,39 +1,63 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { HostStatsResponse, HostRule, Event } from '../api';
+import { useInterval } from '../hooks/useInterval';
+import Pagination from '../components/Pagination';
 
-// ─── Severity badge ───────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: '#dc2626',
+  high:     '#ea580c',
+  medium:   '#d97706',
+  low:      '#2563eb',
+  info:     '#475569',
+};
+
+const SEVERITY_BG: Record<string, string> = {
+  critical: '#450a0a',
+  high:     '#431407',
+  medium:   '#422006',
+  low:      '#1e3a5f',
+  info:     '#1e293b',
+};
+
+const TIER_COLORS: Record<string, string> = {
+  T0: '#334155',
+  T1: '#1d4ed8',
+  T2: '#d97706',
+  T3: '#ea580c',
+  T4: '#dc2626',
+};
+
+const TIER_BG: Record<string, string> = {
+  T0: '#1e293b',
+  T1: '#1e3a5f',
+  T2: '#422006',
+  T3: '#431407',
+  T4: '#450a0a',
+};
+
+// ─── Severity badge ────────────────────────────────────────────────────────────
 
 function SeverityBadge({ severity }: { severity: string }) {
-  const map: Record<string, string> = {
-    critical: 'bg-red-100 text-red-800 border-red-200',
-    high:     'bg-orange-100 text-orange-800 border-orange-200',
-    medium:   'bg-yellow-100 text-yellow-800 border-yellow-200',
-    low:      'bg-blue-100 text-blue-800 border-blue-200',
-    info:     'bg-gray-100 text-gray-700 border-gray-200',
-  };
-  const cls = map[severity] ?? map.info;
+  const color = SEVERITY_COLORS[severity] ?? SEVERITY_COLORS.info;
+  const bg    = SEVERITY_BG[severity]    ?? SEVERITY_BG.info;
   return (
-    <span className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase tracking-wide ${cls}`}>
+    <span style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '9999px', background: bg, color, border: `1px solid ${color}40`, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
       {severity}
     </span>
   );
 }
 
-// ─── Tier badge ───────────────────────────────────────────────────────────────
+// ─── Tier badge ────────────────────────────────────────────────────────────────
 
 function TierBadge({ tier }: { tier: number | string }) {
   const t = typeof tier === 'number' ? `T${tier}` : String(tier);
-  const map: Record<string, string> = {
-    T0: 'bg-gray-100 text-gray-600 border-gray-200',
-    T1: 'bg-blue-100 text-blue-700 border-blue-200',
-    T2: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    T3: 'bg-orange-100 text-orange-800 border-orange-200',
-    T4: 'bg-red-100 text-red-800 border-red-200',
-  };
-  const cls = map[t] ?? 'bg-gray-100 text-gray-600 border-gray-200';
+  const color = TIER_COLORS[t] ?? TIER_COLORS.T0;
+  const bg    = TIER_BG[t]    ?? TIER_BG.T0;
   return (
-    <span className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase tracking-wide ${cls}`}>
+    <span style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '9999px', background: bg, color, border: `1px solid ${color}40`, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
       {t}
     </span>
   );
@@ -41,57 +65,29 @@ function TierBadge({ tier }: { tier: number | string }) {
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
-function StatCard({
-  label,
-  value,
-  sub,
-  accent,
-}: {
-  label: string;
-  value: number | string;
-  sub?: string;
-  accent?: string;
-}) {
-  const border = accent ?? 'border-l-blue-400';
+function StatCard({ label, value, sub, color }: { label: string; value: number | string; sub?: string; color?: string }) {
   return (
-    <div className={`bg-white rounded-lg shadow-sm border border-gray-200 border-l-4 ${border} p-5`}>
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className="text-3xl font-bold text-gray-900 mt-1">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div className="card stat-card">
+      <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
+      <div className="stat-label">{label}</div>
+      {sub && <div style={{ fontSize: '0.7rem', color: '#334155', marginTop: '0.125rem' }}>{sub}</div>}
     </div>
   );
 }
 
-// ─── Bar chart ────────────────────────────────────────────────────────────────
+// ─── Threat bar ────────────────────────────────────────────────────────────────
 
-function BarChart({ items }: { items: { type: string; count: number }[] }) {
-  const max = Math.max(...items.map((i) => i.count), 1);
-  const palette = [
-    'bg-blue-500',
-    'bg-teal-500',
-    'bg-orange-500',
-    'bg-red-500',
-    'bg-purple-500',
-    'bg-yellow-500',
-    'bg-pink-500',
-    'bg-indigo-500',
-  ];
+function ThreatBar({ label, count, max, color }: { label: string; count: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
   return (
-    <div className="space-y-2">
-      {items.map((item, idx) => (
-        <div key={item.type} className="flex items-center gap-3">
-          <span className="w-48 text-xs text-gray-600 truncate capitalize">
-            {item.type.replace(/_/g, ' ')}
-          </span>
-          <div className="flex-1 h-4 bg-gray-100 rounded overflow-hidden">
-            <div
-              className={`h-full rounded ${palette[idx % palette.length]}`}
-              style={{ width: `${(item.count / max) * 100}%` }}
-            />
-          </div>
-          <span className="w-8 text-xs text-gray-500 text-right">{item.count}</span>
-        </div>
-      ))}
+    <div style={{ marginBottom: '0.625rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '0.25rem' }}>
+        <span style={{ color: '#cbd5e1', textTransform: 'capitalize' }}>{label.replace(/_/g, ' ')}</span>
+        <span style={{ color: '#94a3b8' }}>{count}</span>
+      </div>
+      <div style={{ background: '#0f172a', borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', borderRadius: '4px', width: `${pct}%`, background: color, transition: 'width 0.5s ease' }} />
+      </div>
     </div>
   );
 }
@@ -101,29 +97,22 @@ function BarChart({ items }: { items: { type: string; count: number }[] }) {
 function TierDistribution({ breakdown }: { breakdown: Record<string, number> }) {
   const tiers = ['T0', 'T1', 'T2', 'T3', 'T4'];
   const total = tiers.reduce((s, t) => s + (breakdown[t] ?? 0), 0) || 1;
-  const colours: Record<string, string> = {
-    T0: 'bg-gray-300',
-    T1: 'bg-blue-400',
-    T2: 'bg-yellow-400',
-    T3: 'bg-orange-500',
-    T4: 'bg-red-600',
-  };
   return (
     <div>
-      <div className="flex rounded-full overflow-hidden h-4 mb-3">
+      <div style={{ display: 'flex', borderRadius: '4px', overflow: 'hidden', height: '12px', marginBottom: '0.75rem', background: '#0f172a' }}>
         {tiers.map((t) => {
           const pct = ((breakdown[t] ?? 0) / total) * 100;
           return pct > 0 ? (
-            <div key={t} className={`${colours[t]} h-full`} style={{ width: `${pct}%` }} title={`${t}: ${breakdown[t] ?? 0}`} />
+            <div key={t} style={{ width: `${pct}%`, background: TIER_COLORS[t] }} title={`${t}: ${breakdown[t] ?? 0}`} />
           ) : null;
         })}
       </div>
-      <div className="flex gap-4 flex-wrap">
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
         {tiers.map((t) => (
-          <div key={t} className="flex items-center gap-1.5">
-            <span className={`w-2.5 h-2.5 rounded-full ${colours[t]}`} />
-            <span className="text-xs text-gray-500">
-              {t}: <strong>{breakdown[t] ?? 0}</strong>
+          <div key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: TIER_COLORS[t], display: 'inline-block' }} />
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+              {t}: <strong style={{ color: '#e2e8f0' }}>{breakdown[t] ?? 0}</strong>
             </span>
           </div>
         ))}
@@ -178,6 +167,7 @@ export default function HostGuard() {
   const [rules, setRules] = useState<HostRule[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventsTotal, setEventsTotal] = useState(0);
+  const [eventsLoading, setEventsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'overview' | 'events' | 'rules'>('overview');
@@ -206,6 +196,7 @@ export default function HostGuard() {
   }, []);
 
   const loadEvents = useCallback(async () => {
+    setEventsLoading(true);
     try {
       const res = await api.hostGuardEvents(
         eventTypeFilter || undefined,
@@ -217,6 +208,8 @@ export default function HostGuard() {
     } catch {
       setEvents([]);
       setEventsTotal(0);
+    } finally {
+      setEventsLoading(false);
     }
   }, [eventTypeFilter, hostnameFilter, eventsPage]);
 
@@ -227,6 +220,8 @@ export default function HostGuard() {
   useEffect(() => {
     if (tab === 'events') void loadEvents();
   }, [tab, loadEvents]);
+
+  useInterval(loadData, 20000);
 
   // ─── Filtered rules ─────────────────────────────────────────────────────────
   const filteredRules = rules.filter((r) => {
@@ -246,154 +241,118 @@ export default function HostGuard() {
     .slice(0, 8);
 
   // ─── Page count ─────────────────────────────────────────────────────────────
-  const totalPages = Math.max(1, Math.ceil(eventsTotal / PAGE_SIZE));
+  // totalPages computed by Pagination component
 
   // ─── Render loading ─────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="p-8">
-        <div className="animate-pulse space-y-4 max-w-6xl mx-auto">
-          <div className="h-8 bg-gray-200 rounded w-1/3" />
-          <div className="grid grid-cols-4 gap-4">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-24 bg-gray-200 rounded-lg" />
-            ))}
-          </div>
-          <div className="h-64 bg-gray-200 rounded-lg" />
+      <div style={{ padding: '2rem' }}>
+        <div className="card-grid">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="loading-skeleton" style={{ height: '5rem', borderRadius: '8px' }} />
+          ))}
         </div>
+        <div className="loading-skeleton" style={{ height: '16rem', borderRadius: '8px', marginTop: '1rem' }} />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-8 max-w-6xl mx-auto">
-        <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4">
-          <strong>Error:</strong> {error}
-          <button
-            onClick={() => void loadData()}
-            className="ml-4 underline text-red-700 hover:text-red-900"
-          >
-            Retry
-          </button>
+      <div style={{ padding: '2rem' }}>
+        <div className="error-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>⚠️ {error}</span>
+          <button onClick={() => void loadData()} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Retry</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div>
       {/* ─── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">🖥️ HostGuard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Host-level threat detection — processes, network, persistence, and privilege escalation
-          </p>
+          <h2>🖥️ HostGuard</h2>
+          <p>Host-level threat detection — processes, network, persistence, and privilege escalation</p>
         </div>
-        <button
-          onClick={() => void loadData()}
-          className="px-4 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-sm font-semibold hover:bg-blue-100 transition-colors"
-        >
-          ↻ Refresh
+        <button className="btn-secondary" onClick={() => void loadData()} disabled={loading}>
+          {loading ? '…' : '↻ Refresh'}
         </button>
       </div>
 
       {/* ─── Stat strip ─────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Events"
-          value={(stats?.total_events ?? 0).toLocaleString()}
-          sub={`Last ${stats?.period ?? '24h'}`}
-          accent="border-l-blue-400"
-        />
-        <StatCard
-          label="Threat Events"
-          value={(stats?.threat_events ?? 0).toLocaleString()}
-          sub="Tier 2+"
-          accent="border-l-red-400"
-        />
-        <StatCard
-          label="Unique Hosts"
-          value={stats?.unique_hosts ?? 0}
-          sub="Monitored endpoints"
-          accent="border-l-teal-400"
-        />
-        <StatCard
-          label="Active Rules"
-          value={stats?.active_rules ?? 0}
-          sub={`of ${rules.length} total`}
-          accent="border-l-purple-400"
-        />
+      <div className="card-grid">
+        <StatCard label="Total Events" value={(stats?.total_events ?? 0).toLocaleString()} sub={`Last ${stats?.period ?? '24h'}`} />
+        <StatCard label="Threat Events" value={(stats?.threat_events ?? 0).toLocaleString()} sub="Tier 2+" color={(stats?.threat_events ?? 0) > 0 ? '#f87171' : undefined} />
+        <StatCard label="Unique Hosts" value={stats?.unique_hosts ?? 0} sub="Monitored endpoints" />
+        <StatCard label="Active Rules" value={stats?.active_rules ?? 0} sub={`of ${rules.length} total`} />
       </div>
 
       {/* ─── Tabs ────────────────────────────────────────────────────────────── */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          {(['overview', 'events', 'rules'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`pb-3 text-sm font-semibold capitalize border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {t === 'overview' ? 'Overview' : t === 'events' ? 'Events' : 'Detection Rules'}
-            </button>
-          ))}
-        </nav>
+      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
+        {(['overview', 'events', 'rules'] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              padding: '0.625rem 1.25rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: `2px solid ${tab === t ? '#3b82f6' : 'transparent'}`,
+              color: tab === t ? '#60a5fa' : '#64748b',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+              transition: 'color 0.12s, border-color 0.12s',
+              marginBottom: '-1px',
+            }}
+          >
+            {t === 'overview' ? 'Overview' : t === 'events' ? 'Events' : 'Detection Rules'}
+          </button>
+        ))}
       </div>
 
       {/* ─── Overview tab ────────────────────────────────────────────────────── */}
       {tab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Event type breakdown */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
-              Top Event Types
-            </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '1rem' }}>Top Event Types</div>
             {topEventTypes.length > 0 ? (
-              <BarChart items={topEventTypes} />
+              topEventTypes.map((item, idx) => (
+                <ThreatBar
+                  key={item.type}
+                  label={item.type}
+                  count={item.count}
+                  max={topEventTypes[0]?.count ?? 1}
+                  color={['#3b82f6','#06b6d4','#ea580c','#dc2626','#7c3aed','#d97706','#ec4899','#14b8a6'][idx % 8]}
+                />
+              ))
             ) : (
-              <p className="text-sm text-gray-400 text-center py-8">No event data</p>
+              <div className="empty-state">No event data</div>
             )}
           </div>
 
-          {/* Threat tier distribution */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
-              Tier Distribution
-            </h2>
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '1rem' }}>Tier Distribution</div>
             {stats?.tier_breakdown ? (
               <TierDistribution breakdown={stats.tier_breakdown} />
             ) : (
-              <p className="text-sm text-gray-400 text-center py-8">No tier data</p>
+              <div className="empty-state">No tier data</div>
             )}
           </div>
 
-          {/* Rule summary */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 lg:col-span-2">
-            <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
-              Detection Coverage
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {rules.map((rule) => (
-                <div
-                  key={rule.id}
-                  className="rounded-lg border border-gray-100 bg-gray-50 p-3 hover:bg-white hover:border-gray-200 transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-1">
+          <div className="card" style={{ gridColumn: 'span 2' }}>
+            <div className="section-title" style={{ marginBottom: '1rem' }}>Detection Coverage</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
+              {rules.map(rule => (
+                <div key={rule.id} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px', padding: '0.75rem', borderLeft: `3px solid ${SEVERITY_COLORS[rule.severity] ?? '#475569'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
                     <TierBadge tier={rule.tier} />
-                    {rule.enabled ? (
-                      <span className="w-2 h-2 rounded-full bg-green-400" title="Enabled" />
-                    ) : (
-                      <span className="w-2 h-2 rounded-full bg-gray-300" title="Disabled" />
-                    )}
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: rule.enabled ? '#4ade80' : '#334155', display: 'inline-block' }} />
                   </div>
-                  <p className="text-xs font-semibold text-gray-800 mt-2 leading-tight">{rule.name}</p>
-                  <div className="mt-1">
+                  <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0', marginTop: '0.5rem', lineHeight: 1.3 }}>{rule.name}</p>
+                  <div style={{ marginTop: '0.375rem' }}>
                     <SeverityBadge severity={rule.severity} />
                   </div>
                 </div>
@@ -405,202 +364,145 @@ export default function HostGuard() {
 
       {/* ─── Events tab ──────────────────────────────────────────────────────── */}
       {tab === 'events' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          {/* Filter bar */}
-          <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3">
+        <div>
+          <div className="filter-bar" style={{ marginBottom: '1rem' }}>
             <input
               type="text"
               placeholder="Filter by event type…"
               value={eventTypeFilter}
               onChange={(e) => { setEventTypeFilter(e.target.value); setEventsPage(1); }}
-              className="flex-1 min-w-40 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
             />
             <input
               type="text"
               placeholder="Filter by hostname…"
               value={hostnameFilter}
               onChange={(e) => { setHostnameFilter(e.target.value); setEventsPage(1); }}
-              className="flex-1 min-w-40 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
             />
-            <button
-              onClick={() => { setEventTypeFilter(''); setHostnameFilter(''); setEventsPage(1); }}
-              className="px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-500 hover:bg-gray-50"
-            >
+            <button className="btn-secondary" onClick={() => { setEventTypeFilter(''); setHostnameFilter(''); setEventsPage(1); }}>
               Clear
-            </button>
-            <button
-              onClick={() => void loadEvents()}
-              className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-sm font-semibold hover:bg-blue-100"
-            >
-              Search
             </button>
           </div>
 
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                  <th className="px-4 py-3 text-left">Time</th>
-                  <th className="px-4 py-3 text-left">Hostname</th>
-                  <th className="px-4 py-3 text-left">Event Type</th>
-                  <th className="px-4 py-3 text-left">Process</th>
-                  <th className="px-4 py-3 text-left">PID</th>
-                  <th className="px-4 py-3 text-left">Tier</th>
-                  <th className="px-4 py-3 text-left">Indicators</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
-                      No host events found
-                    </td>
+          <div className="table-card">
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                    {['Time', 'Hostname', 'Event Type', 'Process', 'PID', 'Tier', 'Indicators'].map(h => (
+                      <th key={h} style={{ padding: '0.625rem 1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
                   </tr>
-                ) : (
-                  events.map((ev, idx) => {
+                </thead>
+                <tbody>
+                  {eventsLoading ? (
+                    <tr><td colSpan={7} style={{ padding: '3rem', textAlign: 'center' }}>
+                      <div style={{ width: '24px', height: '24px', border: '2px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', margin: '0 auto', animation: 'spin 0.8s linear infinite' }} />
+                    </td></tr>
+                  ) : events.length === 0 ? (
+                    <tr><td colSpan={7} className="empty-state">No host events found</td></tr>
+                  ) : events.map((ev, idx) => {
                     const ind = indicators(ev);
                     const tier = typeof ev['tier'] === 'number' ? ev['tier'] as number : 0;
                     return (
-                      <tr
-                        key={(ev['id'] as string | undefined) ?? idx}
-                        className="border-b border-gray-50 hover:bg-blue-50/30 transition-colors"
-                      >
-                        <td className="px-4 py-3 text-gray-500 font-mono text-xs whitespace-nowrap">
+                      <tr key={(ev['id'] as string | undefined) ?? idx} style={{ borderBottom: '1px solid #1e293b' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#0f172a')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>
                           {new Date((ev['timestamp'] as string | undefined) ?? '').toLocaleString()}
                         </td>
-                        <td className="px-4 py-3 font-medium text-gray-800">{hostname(ev)}</td>
-                        <td className="px-4 py-3">
-                          <span className="font-mono text-xs bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded">
+                        <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: '#f1f5f9' }}>{hostname(ev)}</td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', background: '#0f172a', color: '#94a3b8', padding: '0.125rem 0.375rem', borderRadius: '4px', border: '1px solid #334155' }}>
                             {eventTypeLabel(ev)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 font-mono text-xs text-gray-600">{processName(ev)}</td>
-                        <td className="px-4 py-3 text-gray-500 font-mono text-xs">{processPid(ev)}</td>
-                        <td className="px-4 py-3">
-                          <TierBadge tier={tier} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-1">
-                            {ind.slice(0, 3).map((ind) => (
-                              <span
-                                key={ind}
-                                className="text-xs bg-red-50 text-red-700 border border-red-100 rounded px-1.5 py-0.5"
-                              >
-                                {ind.replace(/_/g, ' ')}
+                        <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#94a3b8' }}>{processName(ev)}</td>
+                        <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#64748b' }}>{processPid(ev)}</td>
+                        <td style={{ padding: '0.75rem 1rem' }}><TierBadge tier={tier} /></td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            {ind.slice(0, 3).map(tag => (
+                              <span key={tag} style={{ fontSize: '0.7rem', background: '#1c0a0a', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: '4px', padding: '0.125rem 0.375rem' }}>
+                                {tag.replace(/_/g, ' ')}
                               </span>
                             ))}
-                            {ind.length > 3 && (
-                              <span className="text-xs text-gray-400">+{ind.length - 3} more</span>
-                            )}
+                            {ind.length > 3 && <span style={{ fontSize: '0.75rem', color: '#64748b' }}>+{ind.length - 3} more</span>}
                           </div>
                         </td>
                       </tr>
                     );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination */}
-          <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
-            <span>
-              {eventsTotal > 0
-                ? `Showing ${(eventsPage - 1) * PAGE_SIZE + 1}–${Math.min(eventsPage * PAGE_SIZE, eventsTotal)} of ${eventsTotal}`
-                : 'No results'}
-            </span>
-            <div className="flex gap-2">
-              <button
-                disabled={eventsPage <= 1}
-                onClick={() => setEventsPage((p) => p - 1)}
-                className="px-3 py-1 rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
-              >
-                ← Prev
-              </button>
-              <span className="px-3 py-1 text-gray-600">
-                Page {eventsPage} / {totalPages}
-              </span>
-              <button
-                disabled={eventsPage >= totalPages}
-                onClick={() => setEventsPage((p) => p + 1)}
-                className="px-3 py-1 rounded border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
-              >
-                Next →
-              </button>
+                  })}
+                </tbody>
+              </table>
             </div>
+            {eventsTotal > PAGE_SIZE && (
+              <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid #334155' }}>
+                <Pagination page={eventsPage} pageSize={PAGE_SIZE} total={eventsTotal} onPageChange={setEventsPage} />
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* ─── Rules tab ───────────────────────────────────────────────────────── */}
       {tab === 'rules' && (
-        <div className="space-y-4">
-          {/* Search */}
-          <div className="flex gap-3">
+        <div>
+          <div className="filter-bar" style={{ marginBottom: '1rem' }}>
             <input
               type="text"
               placeholder="Search rules by name, ID, or severity…"
               value={ruleSearch}
               onChange={(e) => setRuleSearch(e.target.value)}
-              className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+              style={{ width: '100%', maxWidth: 'none' }}
             />
             {ruleSearch && (
-              <button
-                onClick={() => setRuleSearch('')}
-                className="px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-500 hover:bg-gray-50"
-              >
-                Clear
-              </button>
+              <button className="btn-secondary" onClick={() => setRuleSearch('')}>Clear</button>
             )}
           </div>
 
-          {/* Rule cards */}
           {filteredRules.length === 0 ? (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center text-gray-400">
-              No rules match your search
-            </div>
+            <div className="card empty-state">No rules match your search</div>
           ) : (
-            filteredRules.map((rule) => (
-              <div
-                key={rule.id}
-                className="bg-white rounded-xl shadow-sm border border-gray-200 border-l-4 border-l-blue-400 p-5"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <h3 className="text-base font-semibold text-gray-900">{rule.name}</h3>
-                      <span className="font-mono text-xs text-gray-400">{rule.id}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {filteredRules.map(rule => (
+                <div key={rule.id} className="card" style={{ borderLeft: `3px solid ${SEVERITY_COLORS[rule.severity] ?? '#475569'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '1rem', fontWeight: 700, color: '#f1f5f9' }}>{rule.name}</span>
+                        <code style={{ fontSize: '0.7rem', color: '#475569', background: '#0f172a', padding: '0.125rem 0.375rem', borderRadius: '4px', border: '1px solid #334155' }}>{rule.id}</code>
+                      </div>
+                      <p style={{ fontSize: '0.875rem', color: '#94a3b8', marginBottom: '0.625rem' }}>{rule.description}</p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                        {rule.responses.map(r => (
+                          <span key={r} style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '4px', background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1d4ed8' }}>
+                            {r.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-600">{rule.description}</p>
-
-                    <div className="flex flex-wrap gap-1.5 mt-3">
-                      {rule.responses.map((r) => (
-                        <span
-                          key={r}
-                          className="inline-block text-xs bg-gray-100 text-gray-600 border border-gray-200 rounded px-2 py-0.5 font-medium"
-                        >
-                          {r}
-                        </span>
-                      ))}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem', flexShrink: 0 }}>
+                      <SeverityBadge severity={rule.severity} />
+                      <TierBadge tier={rule.tier} />
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: rule.enabled ? '#4ade80' : '#475569' }}>
+                        {rule.enabled ? '● Enabled' : '○ Disabled'}
+                      </span>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col items-end gap-2 shrink-0">
-                    <SeverityBadge severity={rule.severity} />
-                    <TierBadge tier={rule.tier} />
-                    {rule.enabled ? (
-                      <span className="text-xs text-green-600 font-semibold">● Enabled</span>
-                    ) : (
-                      <span className="text-xs text-gray-400 font-semibold">○ Disabled</span>
-                    )}
                   </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </div>
       )}
     </div>
   );
 }
+
+
+
+
+
+
+
+

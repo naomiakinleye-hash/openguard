@@ -30,6 +30,35 @@ type SummaryRequest struct {
 	TierBreakdown []TierStat `json:"tier_breakdown"`
 	// Incident statuses.
 	IncidentStatuses []IncidentStatusStat `json:"incident_statuses"`
+
+	// HostGuard module stats.
+	HostTotalEvents  int `json:"host_total_events"`
+	HostThreatEvents int `json:"host_threat_events"`
+	HostUniqueHosts  int `json:"host_unique_hosts"`
+	HostActiveRules  int `json:"host_active_rules"`
+
+	// AgentGuard module stats.
+	AgentTotalAgents    int `json:"agent_total_agents"`
+	AgentActiveAgents   int `json:"agent_active_agents"`
+	AgentSuspended      int `json:"agent_suspended_count"`
+	AgentQuarantined    int `json:"agent_quarantine_count"`
+	AgentTotalThreats   int `json:"agent_total_threats"`
+
+	// ModelGuard module stats.
+	ModelTotalCalls    int     `json:"model_total_calls"`
+	ModelBlockedCalls  int     `json:"model_blocked_calls"`
+	ModelAvgLatencyMs  float64 `json:"model_avg_latency_ms"`
+	ModelAvgConfidence float64 `json:"model_avg_confidence"`
+	ModelRiskBreakdown []TierStat `json:"model_risk_breakdown"`
+
+	// CommsGuard module stats.
+	CommsTotalEvents    int            `json:"comms_total_events"`
+	CommsTotalThreats   int            `json:"comms_total_threats"`
+	CommsTopEventTypes  []EventTypeStat `json:"comms_top_event_types"`
+
+	// Per-module threat / anomaly breakdowns.
+	HostTopEventTypes  []EventTypeStat `json:"host_top_event_types"`
+	AgentTopEventTypes []EventTypeStat `json:"agent_top_event_types"`
 }
 
 // EventTypeStat is a (type, count) pair.
@@ -170,12 +199,34 @@ func buildSummaryPrompt(req SummaryRequest) string {
 		incidentLines += fmt.Sprintf("  - %s: %d\n", is.Status, is.Count)
 	}
 
+	hostEventLines := ""
+	for _, et := range req.HostTopEventTypes {
+		hostEventLines += fmt.Sprintf("  - %s: %d\n", et.Type, et.Count)
+	}
+	agentEventLines := ""
+	for _, et := range req.AgentTopEventTypes {
+		agentEventLines += fmt.Sprintf("  - %s: %d\n", et.Type, et.Count)
+	}
+	commsEventLines := ""
+	for _, et := range req.CommsTopEventTypes {
+		commsEventLines += fmt.Sprintf("  - %s: %d\n", et.Type, et.Count)
+	}
+	modelRiskLines := ""
+	for _, r := range req.ModelRiskBreakdown {
+		modelRiskLines += fmt.Sprintf("  - %s: %d calls\n", r.Tier, r.Count)
+	}
+
 	cpuStr := fmt.Sprintf("%.1f%%", req.CPUUtilPct)
 	if req.CPUUtilPct < 0 {
 		cpuStr = "unavailable"
 	}
 
-	return fmt.Sprintf(`You are an expert security operations analyst. Write a concise (3–5 sentence) natural-language summary of the current state of the system for a security dashboard. Focus on what is notable, any patterns of concern, and the overall security posture. Do NOT output JSON — plain prose only.
+	modelBlockedPct := 0.0
+	if req.ModelTotalCalls > 0 {
+		modelBlockedPct = float64(req.ModelBlockedCalls) / float64(req.ModelTotalCalls) * 100
+	}
+
+	return fmt.Sprintf(`You are an expert security operations analyst. Write a concise (5–8 sentence) natural-language summary of the current state of the system for a security dashboard. Cover the host, agent, model, and communications security layers as well as overall system health. Highlight any detected threats, anomalies, or patterns of concern and describe the overall security posture. Do NOT output JSON — plain prose only.
 
 Dashboard snapshot:
 - Total events captured: %d
@@ -188,6 +239,25 @@ Tier breakdown:
 Top event types:
 %s
 Incident statuses:
+%s
+HostGuard (endpoint security):
+- Total host events: %d  |  Threat events: %d
+- Unique hosts monitored: %d  |  Active detection rules: %d
+- Host threat / anomaly breakdown:
+%s
+AgentGuard (AI agent security):
+- Total agents: %d  |  Active: %d  |  Suspended: %d  |  Quarantined: %d
+- Total agent threats detected: %d
+- Agent threat / anomaly breakdown:
+%s
+ModelGuard (LLM gateway security):
+- Total model calls: %d  |  Blocked: %d (%.1f%% block rate)
+- Avg latency: %.0f ms  |  Avg confidence: %.0f%%
+- Model call risk distribution:
+%s
+CommsGuard (communications security):
+- Total comms events: %d  |  Threats detected: %d
+- Top comms threat types:
 %s`,
 		req.TotalEvents,
 		req.TotalIncidents,
@@ -196,6 +266,17 @@ Incident statuses:
 		tierLines,
 		typeLines,
 		incidentLines,
+		req.HostTotalEvents, req.HostThreatEvents,
+		req.HostUniqueHosts, req.HostActiveRules,
+		hostEventLines,
+		req.AgentTotalAgents, req.AgentActiveAgents, req.AgentSuspended, req.AgentQuarantined,
+		req.AgentTotalThreats,
+		agentEventLines,
+		req.ModelTotalCalls, req.ModelBlockedCalls, modelBlockedPct,
+		req.ModelAvgLatencyMs, req.ModelAvgConfidence*100,
+		modelRiskLines,
+		req.CommsTotalEvents, req.CommsTotalThreats,
+		commsEventLines,
 	)
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type SummaryResponse } from '../api';
+import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type SummaryResponse, type HostStatsResponse, type AgentStatsResponse, type ModelGuardStatsResponse, type CommsStatsResponse } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
@@ -35,11 +35,19 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [liveCount, setLiveCount] = useState(0);
+  const [hostStats, setHostStats] = useState<HostStatsResponse | null>(null);
+  const [agentStats, setAgentStats] = useState<AgentStatsResponse | null>(null);
+  const [modelStats, setModelStats] = useState<ModelGuardStatsResponse | null>(null);
+  const [commsStats, setCommsStats] = useState<CommsStatsResponse | null>(null);
 
   const fetchSummary = useCallback((
     evts: EventsResponse | null,
     incs: IncidentsResponse | null,
     stats: SystemStats | null,
+    hStats: HostStatsResponse | null,
+    aStats: AgentStatsResponse | null,
+    mStats: ModelGuardStatsResponse | null,
+    cStats: CommsStatsResponse | null,
     force = false,
   ) => {
     // Aggregate event-type counts from the current event window
@@ -74,6 +82,30 @@ export default function Dashboard() {
         .map(([type, count]) => ({ type, count })),
       tier_breakdown: Object.entries(tierMap).map(([tier, count]) => ({ tier, count })),
       incident_statuses: Object.entries(statusMap).map(([status, count]) => ({ status, count })),
+      // HostGuard
+      host_total_events:  hStats?.total_events  ?? 0,
+      host_threat_events: hStats?.threat_events ?? 0,
+      host_unique_hosts:  hStats?.unique_hosts  ?? 0,
+      host_active_rules:  hStats?.active_rules  ?? 0,
+      // AgentGuard
+      agent_total_agents:    aStats?.total_agents     ?? 0,
+      agent_active_agents:   aStats?.active_agents    ?? 0,
+      agent_suspended_count: aStats?.suspended_count  ?? 0,
+      agent_quarantine_count: aStats?.quarantine_count ?? 0,
+      agent_total_threats:   aStats?.total_threats    ?? 0,
+      // ModelGuard
+      model_total_calls:    mStats?.total_calls    ?? 0,
+      model_blocked_calls:  mStats?.blocked_calls  ?? 0,
+      model_avg_latency_ms: mStats?.avg_latency_ms ?? 0,
+      model_avg_confidence: mStats?.avg_confidence ?? 0,
+      model_risk_breakdown: mStats?.risk_breakdown ?? [],
+      // CommsGuard
+      comms_total_events:    cStats?.total_events ?? 0,
+      comms_total_threats:   cStats?.total_threats ?? 0,
+      comms_top_event_types: cStats?.event_types?.slice(0, 5) ?? [],
+      // Threat / anomaly breakdowns
+      host_top_event_types:  hStats?.event_types?.slice(0, 5) ?? [],
+      agent_top_event_types: aStats?.event_types?.slice(0, 5) ?? [],
     })
       .then((r) => setAiSummary(r))
       .catch((err: unknown) => setSummaryError(
@@ -83,6 +115,12 @@ export default function Dashboard() {
   }, [aiSummary]);
 
   const fetchAll = useCallback(() => {
+    // Guard module stats — fire-and-forget so they don't block the main load
+    api.hostGuardStats().then(setHostStats).catch(() => {});
+    api.agentStats().then(setAgentStats).catch(() => {});
+    api.modelGuardStats().then(setModelStats).catch(() => {});
+    api.commsStats().then(setCommsStats).catch(() => {});
+
     Promise.all([api.health(), api.events(), api.incidents(), api.systemStats()])
       .then(([h, e, i, s]) => {
         setHealth(h);
@@ -92,7 +130,7 @@ export default function Dashboard() {
         setLastUpdated(new Date());
         // Fetch summary once after first data load (skip on subsequent polls
         // unless the user explicitly triggers regeneration).
-        fetchSummary(e, i, s, false);
+        fetchSummary(e, i, s, hostStats, agentStats, modelStats, commsStats, false);
       })
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : String(err)),
@@ -207,12 +245,93 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── Security Modules Overview ───────────────────────────────── */}
+      <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+        {/* HostGuard */}
+        <div className="card" style={{ borderLeft: '3px solid #ea580c', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>🖥️ HostGuard</span>
+            <Link to="/hostguard" style={{ fontSize: '0.8125rem', color: '#94a3b8', textDecoration: 'none' }}>View →</Link>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f1f5f9' }}>{hostStats?.total_events ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Total Events</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#ea580c' }}>{hostStats?.threat_events ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Threat Events</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f1f5f9' }}>{hostStats?.unique_hosts ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Unique Hosts</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f1f5f9' }}>{hostStats?.active_rules ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Active Rules</div>
+            </div>
+          </div>
+        </div>
+
+        {/* AgentGuard */}
+        <div className="card" style={{ borderLeft: '3px solid #7c3aed', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>🤖 AgentGuard</span>
+            <Link to="/agentguard" style={{ fontSize: '0.8125rem', color: '#94a3b8', textDecoration: 'none' }}>View →</Link>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#4ade80' }}>{agentStats?.active_agents ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Active Agents</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#ea580c' }}>{agentStats?.quarantine_count ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Quarantined</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#d97706' }}>{agentStats?.suspended_count ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Suspended</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#dc2626' }}>{agentStats?.total_threats ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Total Threats</div>
+            </div>
+          </div>
+        </div>
+
+        {/* ModelGuard */}
+        <div className="card" style={{ borderLeft: '3px solid #2563eb', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>🧠 ModelGuard</span>
+            <Link to="/modelguard" style={{ fontSize: '0.8125rem', color: '#94a3b8', textDecoration: 'none' }}>View →</Link>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f1f5f9' }}>{modelStats?.total_calls ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Total Calls</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#dc2626' }}>{modelStats?.blocked_calls ?? '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Blocked</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f1f5f9' }}>{modelStats ? `${modelStats.avg_latency_ms} ms` : '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Avg Latency</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#4ade80' }}>{modelStats ? `${((modelStats.avg_confidence ?? 0) * 100).toFixed(0)}%` : '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Avg Confidence</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* ── AI Summary ───────────────────────────────────────────────── */}
       <AISummary
         data={aiSummary}
         loading={summaryLoading}
         error={summaryError}
-        onRefresh={() => fetchSummary(events, incidents, sysStats, true)}
+        onRefresh={() => fetchSummary(events, incidents, sysStats, hostStats, agentStats, modelStats, commsStats, true)}
       />
 
       {/* ── CPU & Memory utilisation row ─────────────────────────────── */}

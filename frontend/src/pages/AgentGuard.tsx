@@ -1,20 +1,62 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { AgentRecord, AgentStatsResponse, AgentRule } from '../api';
+import { useInterval } from '../hooks/useInterval';
+import Pagination from '../components/Pagination';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 25;
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: '#dc2626',
+  high:     '#ea580c',
+  medium:   '#d97706',
+  low:      '#2563eb',
+  info:     '#475569',
+};
+
+const SEVERITY_BG: Record<string, string> = {
+  critical: '#450a0a',
+  high:     '#431407',
+  medium:   '#422006',
+  low:      '#1e3a5f',
+  info:     '#1e293b',
+};
+
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  prompt_injection:          '#dc2626',
+  data_exfiltration:         '#ea580c',
+  unapproved_tool_use:       '#d97706',
+  self_policy_modification:  '#7c3aed',
+  unsanctioned_outreach:     '#be185d',
+  unknown:                   '#475569',
+};
+
+const AGENT_COLORS = [
+  '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981',
+  '#f59e0b', '#ef4444', '#ec4899', '#14b8a6',
+];
 
 // ─── Severity badge ───────────────────────────────────────────────────────────
 
 function SeverityBadge({ severity }: { severity: string }) {
-  const map: Record<string, string> = {
-    critical: 'bg-red-100 text-red-800 border-red-200',
-    high: 'bg-orange-100 text-orange-800 border-orange-200',
-    medium: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    low: 'bg-blue-100 text-blue-800 border-blue-200',
-    info: 'bg-gray-100 text-gray-700 border-gray-200',
-  };
-  const cls = map[severity] ?? map.info;
+  const color = SEVERITY_COLORS[severity] ?? SEVERITY_COLORS.info;
+  const bg    = SEVERITY_BG[severity]    ?? SEVERITY_BG.info;
   return (
-    <span className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase tracking-wide ${cls}`}>
+    <span
+      style={{
+        fontSize: '0.7rem',
+        padding: '0.125rem 0.5rem',
+        borderRadius: '9999px',
+        background: bg,
+        color,
+        border: `1px solid ${color}40`,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+      }}
+    >
       {severity}
     </span>
   );
@@ -24,21 +66,31 @@ function SeverityBadge({ severity }: { severity: string }) {
 
 function StatusBadge({ agent }: { agent: AgentRecord }) {
   if (agent.quarantined)
-    return <span className="inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase bg-red-100 text-red-800 border-red-200">Quarantined</span>;
+    return (
+      <span style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '9999px', background: '#450a0a', color: '#f87171', border: '1px solid #7f1d1d', fontWeight: 700, textTransform: 'uppercase' as const }}>
+        Quarantined
+      </span>
+    );
   if (agent.suspended)
-    return <span className="inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase bg-yellow-100 text-yellow-800 border-yellow-200">Suspended</span>;
-  return <span className="inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase bg-green-100 text-green-800 border-green-200">Active</span>;
+    return (
+      <span style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '9999px', background: '#422006', color: '#fcd34d', border: '1px solid #92400e', fontWeight: 700, textTransform: 'uppercase' as const }}>
+        Suspended
+      </span>
+    );
+  return (
+    <span style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '9999px', background: '#14532d', color: '#86efac', border: '1px solid #166534', fontWeight: 700, textTransform: 'uppercase' as const }}>
+      Active
+    </span>
+  );
 }
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent }: { label: string; value: number | string; sub?: string; accent?: string }) {
-  const border = accent ?? 'border-l-blue-400';
+function StatCard({ label, value, color }: { label: string; value: number | string; color?: string }) {
   return (
-    <div className={`bg-white rounded-lg shadow-sm border border-gray-200 border-l-4 ${border} p-5`}>
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className="text-3xl font-bold text-gray-900 mt-1">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div className="card stat-card">
+      <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
+      <div className="stat-label">{label}</div>
     </div>
   );
 }
@@ -59,27 +111,32 @@ function AgentDetailModal({ agent, onClose, onAction }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
-        <div className="flex items-start justify-between mb-4">
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '12px', width: '100%', maxWidth: '520px', padding: '1.5rem', maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
           <div>
-            <h2 className="text-lg font-bold text-gray-900">{agent.agent_name}</h2>
-            <p className="text-xs text-gray-500 font-mono">{agent.agent_id}</p>
+            <h2 style={{ color: '#f1f5f9', fontWeight: 700, fontSize: '1.125rem', margin: 0 }}>{agent.agent_name}</h2>
+            <code style={{ color: '#64748b', fontSize: '0.75rem' }}>{agent.agent_id}</code>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '1.25rem', cursor: 'pointer', lineHeight: 1 }}>&times;</button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-5">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
           <InfoRow label="Type" value={agent.agent_type} />
           <InfoRow label="Status" value={<StatusBadge agent={agent} />} />
           <InfoRow label="Token Quota" value={agent.token_quota === 0 ? 'Unlimited' : agent.token_quota.toLocaleString()} />
           <InfoRow label="Call Quota" value={agent.call_quota === 0 ? 'Unlimited' : agent.call_quota.toLocaleString()} />
           <InfoRow label="Actions" value={agent.action_count.toLocaleString()} />
           <InfoRow label="Threats" value={String(agent.threat_count)} />
-          <div className="col-span-2">
+          <div style={{ gridColumn: 'span 2' }}>
             <InfoRow label="Approved Tools" value={agent.approved_tools.join(', ') || '—'} />
           </div>
-          <div className="col-span-2">
+          <div style={{ gridColumn: 'span 2' }}>
             <InfoRow label="Approved Domains" value={agent.approved_domains.join(', ') || '—'} />
           </div>
           {agent.registered_at && (
@@ -90,12 +147,12 @@ function AgentDetailModal({ agent, onClose, onAction }: {
           )}
         </div>
 
-        <div className="flex gap-2 pt-4 border-t border-gray-100">
+        <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '1rem', borderTop: '1px solid #334155' }}>
           {!agent.suspended && !agent.quarantined && (
             <button
               disabled={busy}
               onClick={() => act('suspend')}
-              className="flex-1 py-2 rounded-lg bg-yellow-50 text-yellow-800 border border-yellow-200 text-sm font-semibold hover:bg-yellow-100 disabled:opacity-50"
+              style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#422006', color: '#fcd34d', border: '1px solid #92400e', fontSize: '0.875rem', fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer' }}
             >
               Suspend
             </button>
@@ -104,7 +161,7 @@ function AgentDetailModal({ agent, onClose, onAction }: {
             <button
               disabled={busy}
               onClick={() => act('unsuspend')}
-              className="flex-1 py-2 rounded-lg bg-green-50 text-green-800 border border-green-200 text-sm font-semibold hover:bg-green-100 disabled:opacity-50"
+              style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#14532d', color: '#86efac', border: '1px solid #166534', fontSize: '0.875rem', fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer' }}
             >
               Unsuspend
             </button>
@@ -113,14 +170,14 @@ function AgentDetailModal({ agent, onClose, onAction }: {
             <button
               disabled={busy}
               onClick={() => act('quarantine')}
-              className="flex-1 py-2 rounded-lg bg-red-50 text-red-800 border border-red-200 text-sm font-semibold hover:bg-red-100 disabled:opacity-50"
+              style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#450a0a', color: '#f87171', border: '1px solid #7f1d1d', fontSize: '0.875rem', fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer' }}
             >
               Quarantine
             </button>
           )}
           <button
             onClick={onClose}
-            className="flex-1 py-2 rounded-lg bg-gray-50 text-gray-700 border border-gray-200 text-sm font-semibold hover:bg-gray-100"
+            style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#0f172a', color: '#94a3b8', border: '1px solid #334155', fontSize: '0.875rem', fontWeight: 600, cursor: 'pointer' }}
           >
             Close
           </button>
@@ -133,39 +190,25 @@ function AgentDetailModal({ agent, onClose, onAction }: {
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <p className="text-xs text-gray-400 uppercase tracking-wide mb-0.5">{label}</p>
-      <div className="text-sm text-gray-800 font-medium">{value}</div>
+      <p style={{ fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.25rem' }}>{label}</p>
+      <div style={{ fontSize: '0.875rem', color: '#e2e8f0', fontWeight: 500 }}>{value}</div>
     </div>
   );
 }
 
-// ─── Bar chart ────────────────────────────────────────────────────────────────
+// ─── Threat bar ───────────────────────────────────────────────────────────────
 
-function BarChart({ items }: { items: { type: string; count: number }[] }) {
-  const max = Math.max(...items.map(i => i.count), 1);
-  const palette = [
-    'bg-red-500',
-    'bg-orange-500',
-    'bg-yellow-500',
-    'bg-purple-500',
-    'bg-blue-500',
-    'bg-pink-500',
-    'bg-teal-500',
-  ];
+function ThreatBar({ label, count, max, color }: { label: string; count: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
   return (
-    <div className="space-y-2">
-      {items.map((item, idx) => (
-        <div key={item.type} className="flex items-center gap-3">
-          <span className="w-44 text-xs text-gray-600 truncate capitalize">{item.type.replace(/_/g, ' ')}</span>
-          <div className="flex-1 h-4 bg-gray-100 rounded overflow-hidden">
-            <div
-              className={`h-full rounded ${palette[idx % palette.length]}`}
-              style={{ width: `${(item.count / max) * 100}%` }}
-            />
-          </div>
-          <span className="w-8 text-xs text-gray-500 text-right">{item.count}</span>
-        </div>
-      ))}
+    <div style={{ marginBottom: '0.625rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '0.25rem' }}>
+        <span style={{ color: '#cbd5e1', textTransform: 'capitalize' }}>{label.replace(/_/g, ' ')}</span>
+        <span style={{ color: '#94a3b8' }}>{count}</span>
+      </div>
+      <div style={{ background: '#0f172a', borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', borderRadius: '4px', width: `${pct}%`, background: color, transition: 'width 0.5s ease' }} />
+      </div>
     </div>
   );
 }
@@ -185,6 +228,8 @@ export default function AgentGuard() {
   const [agentFilter, setAgentFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [eventsPage, setEventsPage] = useState(1);
+  const [agentSearch, setAgentSearch] = useState('');
+  const [ruleSearch, setRuleSearch] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,8 +260,11 @@ export default function AgentGuard() {
     }
   }, [agentFilter, typeFilter, eventsPage]);
 
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (tab === 'events') loadEvents(); }, [tab, loadEvents]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (tab === 'events') void loadEvents(); }, [tab, loadEvents]);
+  useInterval(load, 20000);
+
+  const maxEventTypeCount = (stats?.event_types ?? []).reduce((m, e) => Math.max(m, e.count), 1);
 
   const handleAction = async (id: string, action: 'suspend' | 'unsuspend' | 'quarantine') => {
     if (action === 'suspend') await api.suspendAgent(id);
@@ -229,206 +277,239 @@ export default function AgentGuard() {
   const suspendedAgents = agents.filter(a => a.suspended);
   const quarantinedAgents = agents.filter(a => a.quarantined);
 
-  return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">AgentGuard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">AI agent policy enforcement and threat detection</p>
+  const filteredAgents = agents.filter(a => {
+    if (!agentSearch) return true;
+    const q = agentSearch.toLowerCase();
+    return (
+      a.agent_name.toLowerCase().includes(q) ||
+      a.agent_id.toLowerCase().includes(q) ||
+      a.agent_type.toLowerCase().includes(q)
+    );
+  });
+
+  const filteredRules = rules.filter(r => {
+    if (!ruleSearch) return true;
+    const q = ruleSearch.toLowerCase();
+    return (
+      r.name.toLowerCase().includes(q) ||
+      r.id.toLowerCase().includes(q) ||
+      r.description.toLowerCase().includes(q) ||
+      r.severity.toLowerCase().includes(q)
+    );
+  });
+
+  if (loading && agents.length === 0) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <div className="card-grid">
+          {[0, 1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="loading-skeleton" style={{ height: '5rem', borderRadius: '8px' }} />
+          ))}
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? 'Loading…' : 'Refresh'}
+        <div className="loading-skeleton" style={{ height: '16rem', borderRadius: '8px', marginTop: '1rem' }} />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <div className="error-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>⚠️ {error}</span>
+          <button onClick={() => void load()} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Retry</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* ── Page Header ─────────────────────────────────────────────────── */}
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <h2>🤖 AgentGuard</h2>
+          <p>AI agent policy enforcement and threat detection</p>
+        </div>
+        <button className="btn-secondary" onClick={() => void load()} disabled={loading}>
+          {loading ? '…' : '↻ Refresh'}
         </button>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">{error}</div>
-      )}
-
-      {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatCard label="Total Agents" value={stats?.total_agents ?? agents.length} accent="border-l-blue-400" />
-        <StatCard label="Active" value={stats?.active_agents ?? activeAgents.length} accent="border-l-green-400" />
-        <StatCard label="Suspended" value={stats?.suspended_count ?? suspendedAgents.length} accent="border-l-yellow-400" />
-        <StatCard label="Quarantined" value={stats?.quarantine_count ?? quarantinedAgents.length} accent="border-l-red-400" />
-        <StatCard label="Total Threats" value={stats?.total_threats ?? 0} accent="border-l-orange-500" />
-        <StatCard label="Total Actions" value={stats?.total_actions?.toLocaleString() ?? '0'} accent="border-l-purple-400" />
+      {/* ── Stats Row ────────────────────────────────────────────────────── */}
+      <div className="card-grid">
+        <StatCard label="Total Agents" value={stats?.total_agents ?? agents.length} />
+        <StatCard label="Active" value={stats?.active_agents ?? activeAgents.length} color="#86efac" />
+        <StatCard label="Suspended" value={stats?.suspended_count ?? suspendedAgents.length} color={(stats?.suspended_count ?? suspendedAgents.length) > 0 ? '#fcd34d' : undefined} />
+        <StatCard label="Quarantined" value={stats?.quarantine_count ?? quarantinedAgents.length} color={(stats?.quarantine_count ?? quarantinedAgents.length) > 0 ? '#f87171' : undefined} />
+        <StatCard label="Total Threats" value={stats?.total_threats ?? 0} color={(stats?.total_threats ?? 0) > 0 ? '#f87171' : undefined} />
+        <StatCard label="Total Actions" value={(stats?.total_actions ?? 0).toLocaleString()} />
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex gap-6">
-          {(['agents', 'events', 'rules'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`pb-3 text-sm font-semibold capitalize border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {t === 'agents' ? 'Agent Registry' : t === 'events' ? 'Threat Events' : 'Detection Rules'}
-            </button>
-          ))}
-        </nav>
+      {/* ── Tabs ─────────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
+        {(['agents', 'events', 'rules'] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              padding: '0.625rem 1.25rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: `2px solid ${tab === t ? '#3b82f6' : 'transparent'}`,
+              color: tab === t ? '#60a5fa' : '#64748b',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+              transition: 'color 0.12s, border-color 0.12s',
+              marginBottom: '-1px',
+            }}
+          >
+            {t === 'agents' ? 'Agent Registry' : t === 'events' ? 'Threat Events' : 'Detection Rules'}
+          </button>
+        ))}
       </div>
 
       {/* ── Tab: Agent Registry ── */}
       {tab === 'agents' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Agent table */}
-            <div className="lg:col-span-2 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="text-base font-semibold text-gray-900">Registered Agents</h2>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      <th className="px-4 py-3 text-left">Agent</th>
-                      <th className="px-4 py-3 text-left">Type</th>
-                      <th className="px-4 py-3 text-left">Status</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                      <th className="px-4 py-3 text-right">Threats</th>
-                      <th className="px-4 py-3 text-right"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {agents.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-gray-400 text-sm">No agents registered</td>
-                      </tr>
-                    )}
-                    {agents.map(agent => (
-                      <tr key={agent.agent_id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-gray-900">{agent.agent_name}</div>
-                          <div className="text-xs text-gray-400 font-mono">{agent.agent_id}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs">
-                            {agent.agent_type}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge agent={agent} />
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-600">{agent.action_count.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right">
-                          <span className={agent.threat_count > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}>
-                            {agent.threat_count}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            onClick={() => setSelectedAgent(agent)}
-                            className="text-blue-600 hover:text-blue-800 text-xs font-semibold"
-                          >
-                            Details
-                          </button>
-                        </td>
-                      </tr>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '1.25rem', alignItems: 'start' }}>
+          <div className="table-card">
+            <div className="table-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Registered Agents</span>
+              <input
+                type="text"
+                placeholder="Search agents…"
+                value={agentSearch}
+                onChange={e => setAgentSearch(e.target.value)}
+                style={{ background: '#0f172a', border: '1px solid #334155', color: '#e2e8f0', borderRadius: '6px', padding: '0.25rem 0.75rem', fontSize: '0.8125rem', outline: 'none', width: '180px' }}
+              />
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                    {['Agent', 'Type', 'Status', 'Actions', 'Threats', ''].map(h => (
+                      <th key={h} style={{ padding: '0.625rem 1rem', textAlign: h === 'Actions' || h === 'Threats' ? 'right' : 'left', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
-                  </tbody>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredAgents.length === 0 ? (
+                    <tr><td colSpan={6} className="empty-state">No agents registered</td></tr>
+                  ) : filteredAgents.map((agent, idx) => (
+                    <tr key={agent.agent_id} style={{ borderBottom: '1px solid #1e293b' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#0f172a')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: AGENT_COLORS[idx % AGENT_COLORS.length], flexShrink: 0 }} />
+                          <div>
+                            <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{agent.agent_name}</div>
+                            <div style={{ fontSize: '0.7rem', color: '#475569', fontFamily: 'monospace' }}>{agent.agent_id}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <span style={{ fontSize: '0.75rem', padding: '0.125rem 0.5rem', borderRadius: '4px', background: '#0f172a', color: '#94a3b8', border: '1px solid #334155' }}>{agent.agent_type}</span>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}><StatusBadge agent={agent} /></td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: '#94a3b8' }}>{agent.action_count.toLocaleString()}</td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: agent.threat_count > 0 ? '#f87171' : '#475569', fontWeight: agent.threat_count > 0 ? 700 : 400 }}>{agent.threat_count}</td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                        <button onClick={() => setSelectedAgent(agent)} style={{ fontSize: '0.75rem', color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Details</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
                 </table>
               </div>
-            </div>
+          </div>
 
-            {/* Threat breakdown */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">Threat Breakdown</h2>
-              {stats?.event_types && stats.event_types.length > 0 ? (
-                <BarChart items={stats.event_types} />
-              ) : (
-                <p className="text-sm text-gray-400">No threat data available</p>
-              )}
-            </div>
+          <div className="card">
+            <div className="section-title" style={{ marginBottom: '1rem' }}>Threat Breakdown</div>
+            {stats?.event_types && stats.event_types.length > 0 ? (
+              stats.event_types.map(et => (
+                <ThreatBar
+                  key={et.type}
+                  label={et.type}
+                  count={et.count}
+                  max={maxEventTypeCount}
+                  color={EVENT_TYPE_COLORS[et.type] ?? '#475569'}
+                />
+              ))
+            ) : (
+              <div className="empty-state">No threat data</div>
+            )}
           </div>
         </div>
       )}
 
       {/* ── Tab: Threat Events ── */}
       {tab === 'events' && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-3">
+        <div>
+          <div className="filter-bar" style={{ marginBottom: '1rem' }}>
             <input
               type="text"
               placeholder="Filter by agent ID…"
               value={agentFilter}
               onChange={e => { setAgentFilter(e.target.value); setEventsPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
             <input
               type="text"
               placeholder="Filter by event type…"
               value={typeFilter}
               onChange={e => { setTypeFilter(e.target.value); setEventsPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
-            <button
-              onClick={loadEvents}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
-            >
-              Search
-            </button>
+            <button className="btn-secondary" onClick={() => void loadEvents()}>Search</button>
           </div>
-
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900">Agent Threat Events</h2>
-              <span className="text-sm text-gray-500">{eventsTotal} events</span>
+          <div className="table-card">
+            <div className="table-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Agent Threat Events</span>
+              <span style={{ fontSize: '0.8125rem', color: '#64748b' }}>{eventsTotal} events</span>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
-                  <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    <th className="px-4 py-3 text-left">Time</th>
-                    <th className="px-4 py-3 text-left">Agent</th>
-                    <th className="px-4 py-3 text-left">Event Type</th>
-                    <th className="px-4 py-3 text-left">Severity</th>
-                    <th className="px-4 py-3 text-left">Indicators</th>
+                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                    {['Time', 'Agent', 'Event Type', 'Severity', 'Indicators'].map(h => (
+                      <th key={h} style={{ padding: '0.625rem 1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {events.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-gray-400">No threaten events found</td>
-                    </tr>
-                  )}
-                  {events.map((ev, i) => {
+                <tbody>
+                  {events.length === 0 ? (
+                    <tr><td colSpan={5} className="empty-state">No threat events found</td></tr>
+                  ) : events.map((ev, i) => {
                     const meta = (ev.metadata as Record<string, unknown>) ?? {};
                     const indicators = (ev.indicators as string[]) ?? [];
+                    const evType = String(meta.event_type ?? ev.event_type ?? '');
                     return (
-                      <tr key={(ev.event_id as string) ?? i} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
+                      <tr key={(ev.event_id as string) ?? i} style={{ borderBottom: '1px solid #1e293b' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#0f172a')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>
                           {ev.timestamp ? new Date(ev.timestamp as string).toLocaleString() : '—'}
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-gray-800">{String(meta.agent_name ?? '—')}</div>
-                          <div className="text-xs text-gray-400 font-mono">{String(meta.agent_id ?? '')}</div>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{String(meta.agent_name ?? '—')}</div>
+                          <div style={{ fontSize: '0.7rem', color: '#475569', fontFamily: 'monospace' }}>{String(meta.agent_id ?? '')}</div>
                         </td>
-                        <td className="px-4 py-3 capitalize">
-                          {String(meta.event_type ?? ev.event_type ?? '—').replace(/_/g, ' ')}
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span style={{ color: EVENT_TYPE_COLORS[evType] ?? '#94a3b8', textTransform: 'capitalize' }}>
+                            {evType.replace(/_/g, ' ') || '—'}
+                          </span>
                         </td>
-                        <td className="px-4 py-3">
+                        <td style={{ padding: '0.75rem 1rem' }}>
                           <SeverityBadge severity={String(ev.severity ?? 'info')} />
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-1">
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
                             {indicators.slice(0, 3).map(ind => (
-                              <span key={ind} className="px-1.5 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-xs">
+                              <span key={ind} style={{ fontSize: '0.7rem', padding: '0.125rem 0.375rem', borderRadius: '4px', background: '#1c0a0a', color: '#fca5a5', border: '1px solid #7f1d1d' }}>
                                 {ind.replace(/_/g, ' ')}
                               </span>
                             ))}
                             {indicators.length > 3 && (
-                              <span className="text-xs text-gray-400">+{indicators.length - 3} more</span>
+                              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>+{indicators.length - 3} more</span>
                             )}
                           </div>
                         </td>
@@ -438,67 +519,57 @@ export default function AgentGuard() {
                 </tbody>
               </table>
             </div>
-            {eventsTotal > 25 && (
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
-                <span>Page {eventsPage}</span>
-                <div className="flex gap-2">
-                  <button
-                    disabled={eventsPage <= 1}
-                    onClick={() => { setEventsPage(p => p - 1); loadEvents(); }}
-                    className="px-3 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    disabled={eventsPage * 25 >= eventsTotal}
-                    onClick={() => { setEventsPage(p => p + 1); loadEvents(); }}
-                    className="px-3 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-                  >
-                    Next
-                  </button>
-                </div>
+            {eventsTotal > PAGE_SIZE && (
+              <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid #334155' }}>
+                <Pagination page={eventsPage} pageSize={PAGE_SIZE} total={eventsTotal} onPageChange={setEventsPage} />
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* ── Tab: Detection Rules ── */}
       {tab === 'rules' && (
-        <div className="space-y-4">
-          {rules.map(rule => (
-            <div key={rule.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <span className="font-mono text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">{rule.id}</span>
-                    <h3 className="text-base font-semibold text-gray-900">{rule.name}</h3>
-                    <SeverityBadge severity={rule.severity} />
-                    <span className="text-xs text-gray-400 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded">
-                      Tier: {rule.tier}
+        <div>
+          <div className="filter-bar" style={{ marginBottom: '1rem' }}>
+            <input
+              type="text"
+              placeholder="Search rules by name, ID, or severity…"
+              value={ruleSearch}
+              onChange={e => setRuleSearch(e.target.value)}
+              style={{ width: '100%', maxWidth: 'none' }}
+            />
+          </div>
+          {filteredRules.length === 0 ? (
+            <div className="card empty-state">No rules match your search</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {filteredRules.map(rule => (
+                <div key={rule.id} className="card" style={{ borderLeft: `3px solid ${SEVERITY_COLORS[rule.severity] ?? '#475569'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem', flexWrap: 'wrap' }}>
+                        <code style={{ fontSize: '0.7rem', color: '#475569', background: '#0f172a', padding: '0.125rem 0.375rem', borderRadius: '4px', border: '1px solid #334155' }}>{rule.id}</code>
+                        <span style={{ fontSize: '1rem', fontWeight: 700, color: '#f1f5f9' }}>{rule.name}</span>
+                        <SeverityBadge severity={rule.severity} />
+                        <span style={{ fontSize: '0.7rem', color: '#64748b', background: '#0f172a', padding: '0.125rem 0.375rem', borderRadius: '4px', border: '1px solid #334155' }}>Tier {rule.tier}</span>
+                      </div>
+                      <p style={{ fontSize: '0.875rem', color: '#94a3b8', marginBottom: '0.625rem' }}>{rule.description}</p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                        {rule.responses.map(r => (
+                          <span key={r} style={{ fontSize: '0.7rem', padding: '0.125rem 0.5rem', borderRadius: '4px', background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1d4ed8' }}>
+                            {r.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem', borderRadius: '6px', fontWeight: 600, flexShrink: 0, ...(rule.enabled ? { background: '#14532d', color: '#86efac', border: '1px solid #166534' } : { background: '#1e293b', color: '#475569', border: '1px solid #334155' }) }}>
+                      {rule.enabled ? 'Enabled' : 'Disabled'}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-600 mb-3">{rule.description}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {rule.responses.map(r => (
-                      <span key={r} className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-100 rounded text-xs font-medium">
-                        {r.replace(/_/g, ' ')}
-                      </span>
-                    ))}
-                  </div>
                 </div>
-                <div className="flex-shrink-0">
-                  <span className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold ${
-                    rule.enabled
-                      ? 'bg-green-50 text-green-700 border-green-200'
-                      : 'bg-gray-100 text-gray-500 border-gray-200'
-                  }`}>
-                    {rule.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </div>
-              </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
 

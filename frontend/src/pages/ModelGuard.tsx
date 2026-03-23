@@ -8,6 +8,35 @@ import type {
   KvStat,
 } from '../api';
 import { useToast } from '../contexts/ToastContext';
+import { useInterval } from '../hooks/useInterval';
+import Pagination from '../components/Pagination';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const RISK_COLORS: Record<string, string> = {
+  critical: '#dc2626',
+  high:     '#ea580c',
+  medium:   '#d97706',
+  low:      '#2563eb',
+  info:     '#475569',
+};
+const RISK_BG: Record<string, string> = {
+  critical: '#450a0a',
+  high:     '#431407',
+  medium:   '#422006',
+  low:      '#1e3a5f',
+  info:     '#1e293b',
+};
+const STRATEGY_COLORS: Record<string, string> = {
+  single:   '#2563eb',
+  fallback: '#d97706',
+  quorum:   '#7c3aed',
+};
+const STRATEGY_BG: Record<string, string> = {
+  single:   '#1e3a5f',
+  fallback: '#422006',
+  quorum:   '#2e1065',
+};
 
 // ─── Shared UI atoms ──────────────────────────────────────────────────────────
 
@@ -15,79 +44,82 @@ function StatCard({
   label,
   value,
   sub,
-  accent = 'border-l-blue-400',
+  color = '#2563eb',
 }: {
   label: string;
   value: number | string;
   sub?: string;
-  accent?: string;
+  color?: string;
 }) {
   return (
-    <div
-      className={`bg-white rounded-lg shadow-sm border border-gray-200 border-l-4 ${accent} p-5`}
-    >
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className="text-3xl font-bold text-gray-900 mt-1">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div className="card stat-card" style={{ borderLeft: `3px solid ${color}` }}>
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
+      {sub && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>{sub}</div>}
     </div>
   );
 }
 
 function RiskBadge({ level }: { level: string }) {
-  const map: Record<string, string> = {
-    critical: 'bg-red-100 text-red-800 border-red-200',
-    high: 'bg-orange-100 text-orange-800 border-orange-200',
-    medium: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-    low: 'bg-green-100 text-green-800 border-green-200',
-  };
-  const cls = map[level] ?? 'bg-gray-100 text-gray-600 border-gray-200';
+  const color = RISK_COLORS[level] ?? '#475569';
+  const bg    = RISK_BG[level]    ?? '#1e293b';
   return (
-    <span
-      className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase tracking-wide ${cls}`}
-    >
+    <span style={{
+      display: 'inline-block',
+      padding: '0.125rem 0.5rem',
+      borderRadius: '9999px',
+      border: `1px solid ${color}`,
+      background: bg,
+      color,
+      fontSize: '0.75rem',
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: '0.05em',
+    }}>
       {level}
     </span>
   );
 }
 
 function StrategyBadge({ strategy }: { strategy: string }) {
-  const map: Record<string, string> = {
-    single: 'bg-blue-50 text-blue-700 border-blue-100',
-    fallback: 'bg-yellow-50 text-yellow-700 border-yellow-100',
-    quorum: 'bg-purple-50 text-purple-700 border-purple-100',
-  };
-  const cls = map[strategy] ?? 'bg-gray-100 text-gray-600 border-gray-200';
+  const color = STRATEGY_COLORS[strategy] ?? '#475569';
+  const bg    = STRATEGY_BG[strategy]    ?? '#1e293b';
   return (
-    <span className={`inline-block px-2 py-0.5 rounded border text-xs font-medium ${cls}`}>
+    <span style={{
+      display: 'inline-block',
+      padding: '0.125rem 0.5rem',
+      borderRadius: '9999px',
+      border: `1px solid ${color}`,
+      background: bg,
+      color,
+      fontSize: '0.75rem',
+      fontWeight: 600,
+    }}>
       {strategy}
     </span>
   );
 }
 
-function BarChart({ items }: { items: KvStat[] }) {
+function ThreatBar({ items }: { items: KvStat[] }) {
   const max = Math.max(...items.map((i) => i.count), 1);
-  const palette = [
-    'bg-blue-500',
-    'bg-purple-500',
-    'bg-green-500',
-    'bg-orange-500',
-    'bg-pink-500',
-    'bg-teal-500',
-  ];
+  const palette = ['#2563eb', '#7c3aed', '#059669', '#ea580c', '#db2777', '#0891b2'];
   return (
-    <div className="space-y-2">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
       {items.map((item, idx) => (
-        <div key={item.label} className="flex items-center gap-3">
-          <span className="w-36 text-xs text-gray-600 truncate capitalize">
+        <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <span style={{ width: '8rem', fontSize: '0.75rem', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textTransform: 'capitalize' }}>
             {item.label.replace(/-/g, ' ')}
           </span>
-          <div className="flex-1 h-4 bg-gray-100 rounded overflow-hidden">
-            <div
-              className={`h-full rounded ${palette[idx % palette.length]}`}
-              style={{ width: `${(item.count / max) * 100}%` }}
-            />
+          <div style={{ flex: 1, height: '6px', background: '#0f172a', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${(item.count / max) * 100}%`,
+              background: palette[idx % palette.length],
+              borderRadius: '3px',
+              transition: 'width 0.5s ease',
+            }} />
           </div>
-          <span className="w-8 text-xs text-gray-500 text-right">{item.count}</span>
+          <span style={{ width: '2rem', fontSize: '0.75rem', color: '#64748b', textAlign: 'right' }}>{item.count}</span>
         </div>
       ))}
     </div>
@@ -98,43 +130,42 @@ function BarChart({ items }: { items: KvStat[] }) {
 
 function ProviderHealthPanel({ providers }: { providers: ProviderHealthEntry[] }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h2 className="text-base font-semibold text-gray-900">Provider Health</h2>
-      </div>
-      <div className="divide-y divide-gray-100">
-        {providers.map((p) => (
-          <div key={p.id} className="px-5 py-4 flex items-center gap-4">
-            <div
-              className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${p.healthy ? 'bg-green-400' : 'bg-red-400'}`}
-            />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-900 text-sm">{p.name}</span>
-                {p.healthy ? (
-                  <span className="text-xs text-green-600 font-semibold">Healthy</span>
-                ) : (
-                  <span className="text-xs text-red-600 font-semibold">Unavailable</span>
-                )}
+    <div className="table-card">
+      <div className="table-header">Provider Health</div>
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {providers.length === 0 && (
+          <div className="empty-state" style={{ padding: '1.5rem' }}>No providers found.</div>
+        )}
+        {providers.map((p, idx) => (
+          <div key={p.id} style={{
+            display: 'flex', alignItems: 'center', gap: '1rem',
+            padding: '0.875rem 1.25rem',
+            borderTop: idx > 0 ? '1px solid #334155' : 'none',
+          }}>
+            <div style={{
+              width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0,
+              background: p.healthy ? '#4ade80' : '#dc2626',
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '0.875rem' }}>{p.name}</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: p.healthy ? '#4ade80' : '#f87171' }}>
+                  {p.healthy ? 'Healthy' : 'Unavailable'}
+                </span>
               </div>
-              {p.error && (
-                <p className="text-xs text-red-500 mt-0.5">{p.error}</p>
-              )}
-              <p className="text-xs text-gray-400 font-mono mt-0.5">{p.id}</p>
+              {p.error && <p style={{ fontSize: '0.75rem', color: '#f87171', marginTop: '0.125rem' }}>{p.error}</p>}
+              <p style={{ fontSize: '0.75rem', color: '#475569', fontFamily: 'monospace', marginTop: '0.125rem' }}>{p.id}</p>
             </div>
-            <div className="text-right flex-shrink-0">
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
               {p.healthy && (
-                <span className="text-xs text-gray-500">{p.latency_ms} ms</span>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{p.latency_ms} ms</span>
               )}
-              <p className="text-xs text-gray-400">
+              <p style={{ fontSize: '0.75rem', color: '#475569' }}>
                 {new Date(p.last_checked).toLocaleTimeString()}
               </p>
             </div>
           </div>
         ))}
-        {providers.length === 0 && (
-          <p className="px-5 py-4 text-sm text-gray-400">No providers found.</p>
-        )}
       </div>
     </div>
   );
@@ -180,40 +211,50 @@ function GuardrailsPanel({
     description: string;
     field: keyof GuardrailConfig;
   }) => (
-    <div className="flex items-start justify-between py-3 border-b border-gray-50 last:border-0">
-      <div className="flex-1 min-w-0 pr-4">
-        <p className="text-sm font-medium text-gray-900">{label}</p>
-        <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      padding: '0.875rem 0', borderBottom: '1px solid #334155',
+    }}>
+      <div style={{ flex: 1, minWidth: 0, paddingRight: '1rem' }}>
+        <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f1f5f9' }}>{label}</p>
+        <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>{description}</p>
       </div>
       <button
         onClick={() => toggle(field)}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
-          draft[field] ? 'bg-blue-600' : 'bg-gray-300'
-        }`}
+        style={{
+          position: 'relative', display: 'inline-flex', height: '1.5rem', width: '2.75rem',
+          alignItems: 'center', borderRadius: '9999px', flexShrink: 0,
+          background: draft[field] ? '#1d4ed8' : '#334155',
+          border: 'none', cursor: 'pointer', transition: 'background 0.2s',
+        }}
         role="switch"
         aria-checked={!!draft[field]}
       >
-        <span
-          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-            draft[field] ? 'translate-x-6' : 'translate-x-1'
-          }`}
-        />
+        <span style={{
+          display: 'inline-block', height: '1rem', width: '1rem', borderRadius: '50%',
+          background: '#f1f5f9', boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+          transform: draft[field] ? 'translateX(1.5rem)' : 'translateX(0.25rem)',
+          transition: 'transform 0.2s',
+        }} />
       </button>
     </div>
   );
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{
+        padding: '1rem 1.25rem', borderBottom: '1px solid #334155',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      }}>
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Guardrail Configuration</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: '#f1f5f9' }}>Guardrail Configuration</h2>
+          <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
             Changes take effect at next model call. Constitutional hard rules cannot be disabled.
           </p>
         </div>
       </div>
 
-      <div className="px-5 py-2">
+      <div style={{ padding: '0.5rem 1.25rem' }}>
         <BoolRow
           label="Block on Prompt Injection"
           description="Reject prompts containing known injection patterns (ignore/disregard/jailbreak). Constitutional hard rule."
@@ -230,9 +271,9 @@ function GuardrailsPanel({
           field="redact_pii"
         />
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-4 border-b border-gray-50">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', padding: '1rem 0', borderBottom: '1px solid #334155' }}>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.375rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Max Prompt Length (bytes)
             </label>
             <input
@@ -242,11 +283,11 @@ function GuardrailsPanel({
               step={512}
               value={draft.max_prompt_length}
               onChange={(e) => setNum('max_prompt_length', e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem', color: '#e2e8f0', boxSizing: 'border-box' }}
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.375rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Min Confidence Threshold
             </label>
             <input
@@ -256,14 +297,12 @@ function GuardrailsPanel({
               step={0.05}
               value={draft.min_confidence}
               onChange={(e) => setNum('min_confidence', e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem', color: '#e2e8f0', boxSizing: 'border-box' }}
             />
-            <p className="text-xs text-gray-400 mt-1">
-              0.0 = block nothing; 1.0 = block all uncertain
-            </p>
+            <p style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>0.0 = block nothing; 1.0 = block all uncertain</p>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.375rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Rate Limit (req/min)
             </label>
             <input
@@ -273,17 +312,22 @@ function GuardrailsPanel({
               step={1}
               value={draft.rate_limit_rpm}
               onChange={(e) => setNum('rate_limit_rpm', e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem', color: '#e2e8f0', boxSizing: 'border-box' }}
             />
           </div>
         </div>
       </div>
 
-      <div className="px-5 py-4">
+      <div style={{ padding: '1rem 1.25rem' }}>
         <button
-          onClick={void handleSave}
+          onClick={() => void handleSave()}
           disabled={saving}
-          className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+          style={{
+            padding: '0.5rem 1.25rem', borderRadius: '6px',
+            background: saving ? '#334155' : '#1d4ed8',
+            color: '#f1f5f9', border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
+            fontSize: '0.875rem', fontWeight: 600, opacity: saving ? 0.7 : 1,
+          }}
         >
           {saving ? 'Saving…' : 'Save Configuration'}
         </button>
@@ -292,193 +336,29 @@ function GuardrailsPanel({
   );
 }
 
-// ─── Model call audit table ───────────────────────────────────────────────────
-
-function AuditTable({
-  entries,
-  total,
-  page,
-  provider,
-  riskLevel,
-  onProviderChange,
-  onRiskChange,
-  onPageChange,
-}: {
-  entries: ModelCallEntry[];
-  total: number;
-  page: number;
-  provider: string;
-  riskLevel: string;
-  onProviderChange: (v: string) => void;
-  onRiskChange: (v: string) => void;
-  onPageChange: (v: number) => void;
-}) {
-  const PAGE_SIZE = 25;
-
-  return (
-    <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3">
-        <select
-          value={provider}
-          onChange={(e) => { onProviderChange(e.target.value); onPageChange(1); }}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
-        >
-          <option value="">All Providers</option>
-          <option value="openai-codex">OpenAI Codex</option>
-          <option value="anthropic-claude">Anthropic Claude</option>
-          <option value="google-gemini">Google Gemini</option>
-        </select>
-        <select
-          value={riskLevel}
-          onChange={(e) => { onRiskChange(e.target.value); onPageChange(1); }}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
-        >
-          <option value="">All Risk Levels</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-          <option value="critical">Critical</option>
-        </select>
-      </div>
-
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900">Model Call Audit</h2>
-          <span className="text-sm text-gray-500">{total} records</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                <th className="px-4 py-3 text-left">Time</th>
-                <th className="px-4 py-3 text-left">Agent</th>
-                <th className="px-4 py-3 text-left">Provider</th>
-                <th className="px-4 py-3 text-left">Risk</th>
-                <th className="px-4 py-3 text-left">Strategy</th>
-                <th className="px-4 py-3 text-right">Latency</th>
-                <th className="px-4 py-3 text-right">Tokens</th>
-                <th className="px-4 py-3 text-left">Redactions</th>
-                <th className="px-4 py-3 text-left">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {entries.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-gray-400">
-                    No records found
-                  </td>
-                </tr>
-              )}
-              {entries.map((e) => (
-                <tr key={e.call_id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
-                    {new Date(e.timestamp).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-xs text-gray-600">{e.agent_id}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs font-medium text-gray-700">
-                      {e.provider === 'openai-codex'
-                        ? 'OpenAI Codex'
-                        : e.provider === 'anthropic-claude'
-                        ? 'Claude'
-                        : e.provider === 'google-gemini'
-                        ? 'Gemini'
-                        : e.provider}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <RiskBadge level={e.risk_level} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <StrategyBadge strategy={e.routing_strategy} />
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs text-gray-600">{e.latency_ms} ms</td>
-                  <td className="px-4 py-3 text-right text-xs text-gray-600">
-                    {e.token_count.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    {(e.redactions ?? []).length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {(e.redactions ?? []).map((r) => (
-                          <span
-                            key={r}
-                            className="px-1.5 py-0.5 bg-orange-50 text-orange-700 border border-orange-100 rounded text-xs"
-                          >
-                            {r.replace(/_/g, ' ')}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {e.blocked ? (
-                      <span className="inline-block px-2 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded text-xs font-semibold">
-                        Blocked
-                      </span>
-                    ) : (
-                      <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 border border-green-200 rounded text-xs font-semibold">
-                        Passed
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {total > PAGE_SIZE && (
-          <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
-            <span>
-              Page {page} of {Math.ceil(total / PAGE_SIZE)}
-            </span>
-            <div className="flex gap-2">
-              <button
-                disabled={page <= 1}
-                onClick={() => onPageChange(page - 1)}
-                className="px-3 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-              >
-                Prev
-              </button>
-              <button
-                disabled={page * PAGE_SIZE >= total}
-                onClick={() => onPageChange(page + 1)}
-                className="px-3 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ─── Main page ────────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 25;
 
 export default function ModelGuard() {
   const { addToast } = useToast();
 
-  const [stats, setStats] = useState<ModelGuardStatsResponse | null>(null);
-  const [providers, setProviders] = useState<ProviderHealthEntry[]>([]);
-  const [guardrails, setGuardrails] = useState<GuardrailConfig | null>(null);
+  const [stats, setStats]               = useState<ModelGuardStatsResponse | null>(null);
+  const [providers, setProviders]       = useState<ProviderHealthEntry[]>([]);
+  const [guardrails, setGuardrails]     = useState<GuardrailConfig | null>(null);
   const [auditEntries, setAuditEntries] = useState<ModelCallEntry[]>([]);
-  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditTotal, setAuditTotal]     = useState(0);
 
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
 
   const [tab, setTab] = useState<'overview' | 'audit' | 'guardrails'>('overview');
 
   // Audit filters
   const [auditProvider, setAuditProvider] = useState('');
-  const [auditRisk, setAuditRisk] = useState('');
-  const [auditPage, setAuditPage] = useState(1);
+  const [auditRisk, setAuditRisk]         = useState('');
+  const [auditPage, setAuditPage]         = useState(1);
+  const [agentSearch, setAgentSearch]     = useState('');
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -519,6 +399,8 @@ export default function ModelGuard() {
     if (tab === 'audit') void loadAudit();
   }, [tab, loadAudit]);
 
+  useInterval(loadAll, 30000);
+
   const handleGuardrailSave = useCallback(
     async (cfg: GuardrailConfig) => {
       try {
@@ -537,165 +419,137 @@ export default function ModelGuard() {
       ? ((stats.blocked_calls / stats.total_calls) * 100).toFixed(1)
       : '0';
 
+  const totalAuditPages = Math.ceil((auditTotal || 0) / PAGE_SIZE);
+
+  const displayedAudit = agentSearch
+    ? auditEntries.filter((e) => e.agent_id.toLowerCase().includes(agentSearch.toLowerCase()))
+    : auditEntries;
+
+  if (loading && !stats) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <div className="card-grid" style={{ marginBottom: '1rem' }}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="card loading-skeleton" style={{ height: '5rem' }} />
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1rem' }}>
+          <div className="card loading-skeleton" style={{ height: '16rem' }} />
+          <div className="card loading-skeleton" style={{ height: '16rem' }} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {/* ─── Header ───────────────────────────────────────────────────────────── */}
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">ModelGuard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Model Abstraction Layer — routing, guardrails, and full model call auditing
-          </p>
+          <h2>🧠 ModelGuard</h2>
+          <p>Model Abstraction Layer — routing, guardrails, and full model call auditing</p>
         </div>
         <button
           onClick={() => void loadAll()}
           disabled={loading}
-          className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+          className="btn-secondary"
+          style={{ fontSize: '0.875rem', fontWeight: 600, opacity: loading ? 0.5 : 1 }}
         >
-          {loading ? 'Loading…' : 'Refresh'}
+          {loading ? '…' : '↻ Refresh'}
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
-          {error}
+        <div className="error-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{error}</span>
+          <button onClick={() => void loadAll()} style={{ marginLeft: '1rem', background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}>
+            Retry
+          </button>
         </div>
       )}
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        <StatCard
-          label="Total Calls"
-          value={stats?.total_calls ?? 0}
-          sub={stats?.period ?? '24h'}
-          accent="border-l-blue-400"
-        />
-        <StatCard
-          label="Blocked"
-          value={stats?.blocked_calls ?? 0}
-          sub={`${blockedPct}% of total`}
-          accent="border-l-red-400"
-        />
-        <StatCard
-          label="Avg Latency"
-          value={`${stats?.avg_latency_ms ?? 0} ms`}
-          accent="border-l-orange-400"
-        />
-        <StatCard
-          label="Avg Tokens"
-          value={(stats?.avg_token_count ?? 0).toLocaleString()}
-          accent="border-l-purple-400"
-        />
-        <StatCard
-          label="Avg Confidence"
-          value={`${((stats?.avg_confidence ?? 0) * 100).toFixed(0)}%`}
-          accent="border-l-green-400"
-        />
+      {/* ─── Stats strip ──────────────────────────────────────────────────────── */}
+      <div className="card-grid">
+        <StatCard label="Total Calls"      value={stats?.total_calls ?? 0}                             sub={stats?.period ?? '24h'} color="#2563eb" />
+        <StatCard label="Blocked"          value={stats?.blocked_calls ?? 0}                           sub={`${blockedPct}% of total`} color="#dc2626" />
+        <StatCard label="Avg Latency"      value={`${stats?.avg_latency_ms ?? 0} ms`}                  color="#ea580c" />
+        <StatCard label="Avg Tokens"       value={(stats?.avg_token_count ?? 0).toLocaleString()}      color="#7c3aed" />
+        <StatCard label="Avg Confidence"   value={`${((stats?.avg_confidence ?? 0) * 100).toFixed(0)}%`} color="#059669" />
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex gap-6">
-          {(['overview', 'audit', 'guardrails'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`pb-3 text-sm font-semibold capitalize border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {t === 'overview'
-                ? 'Overview'
-                : t === 'audit'
-                ? 'Model Call Audit'
-                : 'Guardrails'}
-            </button>
-          ))}
-        </nav>
+      {/* ─── Tabs ─────────────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: '2rem', borderBottom: '1px solid #334155', paddingBottom: '0' }}>
+        {(['overview', 'audit', 'guardrails'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              paddingBottom: '0.75rem',
+              fontSize: '0.875rem', fontWeight: 600,
+              color: tab === t ? '#60a5fa' : '#64748b',
+              borderBottom: tab === t ? '2px solid #3b82f6' : '2px solid transparent',
+            }}
+          >
+            {t === 'overview' ? 'Overview' : t === 'audit' ? 'Model Call Audit' : 'Guardrails'}
+          </button>
+        ))}
       </div>
 
-      {/* ── Tab: Overview ── */}
+      {/* ─── Tab: Overview ────────────────────────────────────────────────────── */}
       {tab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem' }}>
           {/* Provider health */}
-          <div className="lg:col-span-1">
+          <div>
             <ProviderHealthPanel providers={providers} />
           </div>
 
           {/* Breakdown charts */}
-          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
-            {/* Provider breakdown */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">Calls by Provider</h2>
-              {stats?.provider_breakdown && stats.provider_breakdown.length > 0 ? (
-                <BarChart items={stats.provider_breakdown} />
-              ) : (
-                <p className="text-sm text-gray-400">No data</p>
-              )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div className="card">
+              <p className="section-title" style={{ marginBottom: '1rem' }}>Calls by Provider</p>
+              {stats?.provider_breakdown && stats.provider_breakdown.length > 0
+                ? <ThreatBar items={stats.provider_breakdown} />
+                : <p style={{ fontSize: '0.875rem', color: '#475569' }}>No data</p>}
             </div>
 
-            {/* Routing strategy breakdown */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">Calls by Strategy</h2>
-              {stats?.strategy_breakdown && stats.strategy_breakdown.length > 0 ? (
-                <BarChart items={stats.strategy_breakdown} />
-              ) : (
-                <p className="text-sm text-gray-400">No data</p>
-              )}
+            <div className="card">
+              <p className="section-title" style={{ marginBottom: '1rem' }}>Calls by Strategy</p>
+              {stats?.strategy_breakdown && stats.strategy_breakdown.length > 0
+                ? <ThreatBar items={stats.strategy_breakdown} />
+                : <p style={{ fontSize: '0.875rem', color: '#475569' }}>No data</p>}
             </div>
 
-            {/* Risk level breakdown */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">Calls by Risk Level</h2>
-              {stats?.risk_breakdown && stats.risk_breakdown.length > 0 ? (
-                <BarChart items={stats.risk_breakdown} />
-              ) : (
-                <p className="text-sm text-gray-400">No data</p>
-              )}
+            <div className="card">
+              <p className="section-title" style={{ marginBottom: '1rem' }}>Calls by Risk Level</p>
+              {stats?.risk_breakdown && stats.risk_breakdown.length > 0
+                ? <ThreatBar items={stats.risk_breakdown} />
+                : <p style={{ fontSize: '0.875rem', color: '#475569' }}>No data</p>}
             </div>
 
-            {/* Pipeline summary */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">Pipeline Stages</h2>
-              <ol className="space-y-3">
+            <div className="card">
+              <p className="section-title" style={{ marginBottom: '1rem' }}>Pipeline Stages</p>
+              <ol style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', listStyle: 'none', padding: 0, margin: 0 }}>
                 {[
-                  {
-                    label: 'Prompt Sanitization',
-                    desc: 'Strip PII, credentials, injection patterns',
-                    color: 'bg-blue-500',
-                  },
-                  {
-                    label: 'Tool Intent Check',
-                    desc: 'Validate tool calls against agent allowlist',
-                    color: 'bg-purple-500',
-                  },
-                  {
-                    label: 'Provider Dispatch',
-                    desc: 'Route by risk level — single / fallback / quorum',
-                    color: 'bg-green-500',
-                  },
-                  {
-                    label: 'Output Validation',
-                    desc: 'Schema check, confidence threshold, guardrails',
-                    color: 'bg-orange-500',
-                  },
-                  {
-                    label: 'Audit Logging',
-                    desc: 'Append tamper-evident record with SHA-256 hash',
-                    color: 'bg-gray-500',
-                  },
+                  { label: 'Prompt Sanitization',  desc: 'Strip PII, credentials, injection patterns',           color: '#2563eb' },
+                  { label: 'Tool Intent Check',     desc: 'Validate tool calls against agent allowlist',          color: '#7c3aed' },
+                  { label: 'Provider Dispatch',     desc: 'Route by risk level — single / fallback / quorum',     color: '#059669' },
+                  { label: 'Output Validation',     desc: 'Schema check, confidence threshold, guardrails',       color: '#ea580c' },
+                  { label: 'Audit Logging',         desc: 'Append tamper-evident record with SHA-256 hash',       color: '#64748b' },
                 ].map((stage, idx) => (
-                  <li key={stage.label} className="flex items-start gap-3">
-                    <div
-                      className={`w-6 h-6 rounded-full ${stage.color} text-white text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}
-                    >
+                  <li key={stage.label} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                    <div style={{
+                      width: '1.5rem', height: '1.5rem', borderRadius: '50%',
+                      background: stage.color, color: '#fff',
+                      fontSize: '0.75rem', fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0, marginTop: '0.125rem',
+                    }}>
                       {idx + 1}
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-900">{stage.label}</p>
-                      <p className="text-xs text-gray-400">{stage.desc}</p>
+                      <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f1f5f9' }}>{stage.label}</p>
+                      <p style={{ fontSize: '0.75rem', color: '#64748b' }}>{stage.desc}</p>
                     </div>
                   </li>
                 ))}
@@ -705,28 +559,130 @@ export default function ModelGuard() {
         </div>
       )}
 
-      {/* ── Tab: Model Call Audit ── */}
+      {/* ─── Tab: Model Call Audit ─────────────────────────────────────────────── */}
       {tab === 'audit' && (
-        <AuditTable
-          entries={auditEntries}
-          total={auditTotal}
-          page={auditPage}
-          provider={auditProvider}
-          riskLevel={auditRisk}
-          onProviderChange={setAuditProvider}
-          onRiskChange={setAuditRisk}
-          onPageChange={(p) => {
-            setAuditPage(p);
-          }}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* Filter bar */}
+          <div className="filter-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder="Search by agent ID…"
+              value={agentSearch}
+              onChange={(e) => setAgentSearch(e.target.value)}
+              style={{ width: '13rem' }}
+            />
+            <select
+              value={auditProvider}
+              onChange={(e) => { setAuditProvider(e.target.value); setAuditPage(1); }}
+            >
+              <option value="">All Providers</option>
+              <option value="openai-codex">OpenAI Codex</option>
+              <option value="anthropic-claude">Anthropic Claude</option>
+              <option value="google-gemini">Google Gemini</option>
+            </select>
+            <select
+              value={auditRisk}
+              onChange={(e) => { setAuditRisk(e.target.value); setAuditPage(1); }}
+            >
+              <option value="">All Risk Levels</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+            {agentSearch && (
+              <button className="btn-secondary" onClick={() => setAgentSearch('')} style={{ fontSize: '0.8125rem' }}>
+                Clear
+              </button>
+            )}
+          </div>
+
+          <div className="table-card">
+            <div className="table-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Model Call Audit</span>
+              <span style={{ fontSize: '0.8125rem', fontWeight: 400, color: '#64748b' }}>{auditTotal} records</span>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
+                <thead>
+                  <tr style={{ background: '#0f172a', borderBottom: '1px solid #334155' }}>
+                    {['Time', 'Agent', 'Provider', 'Risk', 'Strategy', 'Latency', 'Tokens', 'Redactions', 'Status'].map((h) => (
+                      <th key={h} style={{ padding: '0.75rem 1rem', textAlign: h === 'Latency' || h === 'Tokens' ? 'right' : 'left', color: '#64748b', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedAudit.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="empty-state">
+                        {agentSearch ? `No records matching "${agentSearch}"` : 'No records found'}
+                      </td>
+                    </tr>
+                  )}
+                  {displayedAudit.map((e, idx) => (
+                    <tr key={e.call_id} style={{ borderTop: idx > 0 ? '1px solid #1e293b' : 'none' }}>
+                      <td style={{ padding: '0.75rem 1rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+                        {new Date(e.timestamp).toLocaleString()}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#94a3b8' }}>{e.agent_id}</span>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', color: '#f1f5f9', fontWeight: 500 }}>
+                        {e.provider === 'openai-codex' ? 'OpenAI Codex'
+                          : e.provider === 'anthropic-claude' ? 'Claude'
+                          : e.provider === 'google-gemini' ? 'Gemini'
+                          : e.provider}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <RiskBadge level={e.risk_level} />
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <StrategyBadge strategy={e.routing_strategy} />
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: '#94a3b8' }}>{e.latency_ms} ms</td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right', color: '#94a3b8' }}>{e.token_count.toLocaleString()}</td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        {(e.redactions ?? []).length > 0 ? (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            {(e.redactions ?? []).map((r) => (
+                              <span key={r} style={{ padding: '0.125rem 0.375rem', background: '#431407', border: '1px solid #ea580c', borderRadius: '4px', fontSize: '0.7rem', color: '#fb923c' }}>
+                                {r.replace(/_/g, ' ')}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span style={{ color: '#334155' }}>—</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        {e.blocked ? (
+                          <span style={{ display: 'inline-block', padding: '0.125rem 0.5rem', background: '#450a0a', border: '1px solid #dc2626', borderRadius: '9999px', color: '#f87171', fontSize: '0.75rem', fontWeight: 700 }}>Blocked</span>
+                        ) : (
+                          <span style={{ display: 'inline-block', padding: '0.125rem 0.5rem', background: '#052e16', border: '1px solid #16a34a', borderRadius: '9999px', color: '#4ade80', fontSize: '0.75rem', fontWeight: 700 }}>Passed</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {totalAuditPages > 1 && (
+              <div style={{ padding: '0.75rem 1.25rem', borderTop: '1px solid #334155' }}>
+                <Pagination page={auditPage} pageSize={PAGE_SIZE} total={auditTotal} onPageChange={setAuditPage} />
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
-      {/* ── Tab: Guardrails ── */}
+      {/* ─── Tab: Guardrails ──────────────────────────────────────────────────── */}
       {tab === 'guardrails' && guardrails && (
         <GuardrailsPanel config={guardrails} onSave={handleGuardrailSave} />
       )}
       {tab === 'guardrails' && !guardrails && !loading && (
-        <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400">
+        <div className="card empty-state">
           Could not load guardrail configuration.
         </div>
       )}

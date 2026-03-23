@@ -1,48 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type SensorInfo } from '../api';
+import { useInterval } from '../hooks/useInterval';
 
-// ─── Per-sensor colour palette ────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const SENSOR_META: Record<string, { icon: string; accent: string; tag: string; tagColor: string }> = {
-  hostguard: {
-    icon: '🖥️',
-    accent: 'border-l-blue-500',
-    tag: 'Host',
-    tagColor: 'bg-blue-50 text-blue-700 border-blue-200',
-  },
-  agentguard: {
-    icon: '🤖',
-    accent: 'border-l-purple-500',
-    tag: 'Agent',
-    tagColor: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  commsguard: {
-    icon: '💬',
-    accent: 'border-l-green-500',
-    tag: 'Comms',
-    tagColor: 'bg-green-50 text-green-700 border-green-200',
-  },
+const SENSOR_META: Record<string, { icon: string; color: string; bg: string; tag: string }> = {
+  hostguard: { icon: '🖥️', color: '#ea580c', bg: '#431407', tag: 'Host' },
+  agentguard: { icon: '🤖', color: '#7c3aed', bg: '#2e1065', tag: 'Agent' },
+  commsguard: { icon: '💬', color: '#059669', bg: '#022c22', tag: 'Comms' },
 };
+const FALLBACK_META = { icon: '🔬', color: '#475569', bg: '#1e293b', tag: 'Sensor' };
 
-const FALLBACK_META = {
-  icon: '🔬',
-  accent: 'border-l-gray-400',
-  tag: 'Sensor',
-  tagColor: 'bg-gray-100 text-gray-600 border-gray-200',
-};
-
-// Subsystem pill colours cycle through a palette based on index
 const SUB_PALETTE = [
-  'bg-blue-50 text-blue-700 border-blue-100',
-  'bg-purple-50 text-purple-700 border-purple-100',
-  'bg-green-50 text-green-700 border-green-100',
-  'bg-orange-50 text-orange-700 border-orange-100',
-  'bg-pink-50 text-pink-700 border-pink-100',
-  'bg-teal-50 text-teal-700 border-teal-100',
-  'bg-yellow-50 text-yellow-700 border-yellow-100',
+  { color: '#2563eb', bg: '#1e3a5f' },
+  { color: '#7c3aed', bg: '#2e1065' },
+  { color: '#059669', bg: '#022c22' },
+  { color: '#ea580c', bg: '#431407' },
+  { color: '#db2777', bg: '#500724' },
+  { color: '#0891b2', bg: '#082f49' },
+  { color: '#d97706', bg: '#422006' },
 ];
 
-// ─── Copy-to-clipboard helper ─────────────────────────────────────────────────
+// ─── Copy button ──────────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -56,7 +35,11 @@ function CopyButton({ text }: { text: string }) {
     <button
       onClick={handleCopy}
       title="Copy to clipboard"
-      className="ml-1.5 text-gray-300 hover:text-gray-600 transition-colors text-xs select-none"
+      style={{
+        marginLeft: '0.375rem', background: 'none', border: 'none',
+        color: copied ? '#4ade80' : '#475569', cursor: 'pointer',
+        fontSize: '0.75rem', padding: 0, transition: 'color 0.2s',
+      }}
     >
       {copied ? '✓' : '⎘'}
     </button>
@@ -67,40 +50,42 @@ function CopyButton({ text }: { text: string }) {
 
 function ConfigTable({ config }: { config: Record<string, unknown> }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
         <thead>
-          <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            <th className="px-4 py-2.5 text-left w-56">Key</th>
-            <th className="px-4 py-2.5 text-left">Value</th>
+          <tr style={{ background: '#0f172a', borderBottom: '1px solid #334155' }}>
+            <th style={{ padding: '0.5rem 1rem', textAlign: 'left', color: '#64748b', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', width: '14rem' }}>
+              Key
+            </th>
+            <th style={{ padding: '0.5rem 1rem', textAlign: 'left', color: '#64748b', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Value
+            </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
-          {Object.entries(config).map(([key, value]) => (
-            <tr key={key} className="hover:bg-gray-50 group">
-              <td className="px-4 py-2.5 font-mono text-xs text-gray-500 align-top whitespace-nowrap">
+        <tbody>
+          {Object.entries(config).map(([key, value], idx) => (
+            <tr key={key} style={{ borderTop: idx > 0 ? '1px solid #1e293b' : 'none' }}>
+              <td style={{ padding: '0.5rem 1rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#64748b', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
                 {key}
               </td>
-              <td className="px-4 py-2.5 align-top">
+              <td style={{ padding: '0.5rem 1rem', verticalAlign: 'top' }}>
                 {Array.isArray(value) ? (
-                  <ul className="space-y-0.5">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                     {(value as unknown[]).map((v, i) => (
-                      <li key={i} className="flex items-center gap-1">
-                        <span className="font-mono text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                        <code style={{ fontFamily: 'monospace', fontSize: '0.75rem', background: '#1e3a5f', color: '#60a5fa', padding: '0.125rem 0.375rem', borderRadius: '4px' }}>
                           {String(v)}
-                        </span>
+                        </code>
                         <CopyButton text={String(v)} />
-                      </li>
+                      </span>
                     ))}
-                  </ul>
+                  </div>
                 ) : (
-                  <span className="flex items-center gap-1">
-                    <code className="font-mono text-xs text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                  <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <code style={{ fontFamily: 'monospace', fontSize: '0.75rem', background: '#022c22', color: '#4ade80', padding: '0.125rem 0.375rem', borderRadius: '4px' }}>
                       {String(value)}
                     </code>
-                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <CopyButton text={String(value)} />
-                    </span>
+                    <CopyButton text={String(value)} />
                   </span>
                 )}
               </td>
@@ -118,11 +103,9 @@ function SensorCard({ sensor, highlight }: { sensor: SensorInfo; highlight: stri
   const [showConfig, setShowConfig] = useState(false);
   const meta = SENSOR_META[sensor.id] ?? FALLBACK_META;
 
-  // Determine whether it's using NATS or an HTTP listen address
-  const isNats = sensor.listen_addr.toLowerCase().includes('nats');
+  const isNats    = sensor.listen_addr.toLowerCase().includes('nats');
   const natsTopic = sensor.config['nats_topic'] as string | undefined;
 
-  // Highlight matching subsystems when search is active
   const highlightedSubs = useMemo(() => {
     if (!highlight) return sensor.subsystems;
     const lc = highlight.toLowerCase();
@@ -132,46 +115,51 @@ function SensorCard({ sensor, highlight }: { sensor: SensorInfo; highlight: stri
   const showAll = !highlight;
 
   return (
-    <div
-      className={`bg-white rounded-xl shadow-sm border border-gray-200 border-l-4 ${meta.accent} overflow-hidden`}
-    >
-      {/* ── Card header ── */}
-      <div className="px-6 py-5">
-        <div className="flex items-start gap-4">
-          <span className="text-3xl flex-shrink-0 mt-0.5">{meta.icon}</span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap mb-1">
-              <h2 className="text-lg font-bold text-gray-900">{sensor.name}</h2>
-              <span
-                className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold uppercase tracking-wide ${meta.tagColor}`}
-              >
+    <div className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${meta.color}` }}>
+      {/* Header */}
+      <div style={{ padding: '1.25rem 1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>
+          <span style={{ fontSize: '2rem', flexShrink: 0, marginTop: '0.125rem' }}>{meta.icon}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.375rem' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#f1f5f9', margin: 0 }}>{sensor.name}</h3>
+              <span style={{
+                padding: '0.125rem 0.5rem', borderRadius: '9999px',
+                background: meta.bg, border: `1px solid ${meta.color}`,
+                color: meta.color, fontSize: '0.7rem', fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: '0.06em',
+              }}>
                 {meta.tag}
               </span>
-              {/* Status pill — always shown as Active since the API returns configured sensors */}
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-xs font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.125rem 0.5rem', borderRadius: '9999px',
+                background: '#052e16', border: '1px solid #16a34a',
+                color: '#4ade80', fontSize: '0.7rem', fontWeight: 700,
+              }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', animation: 'pulse 2s infinite' }} />
                 Active
               </span>
             </div>
-            <p className="text-sm text-gray-500 leading-relaxed">{sensor.description}</p>
+            <p style={{ fontSize: '0.875rem', color: '#94a3b8', margin: 0, lineHeight: 1.5 }}>{sensor.description}</p>
           </div>
         </div>
 
-        {/* ── Listen / NATS row ── */}
-        <div className="mt-4 flex flex-wrap gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+        {/* Transport row */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
               {isNats ? 'Transport' : 'Listen'}
             </span>
-            <span className="flex items-center gap-1 font-mono text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-lg">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontFamily: 'monospace', fontSize: '0.75rem', background: '#0f172a', color: '#94a3b8', padding: '0.25rem 0.625rem', borderRadius: '6px', border: '1px solid #334155' }}>
               {isNats ? '📨 NATS' : sensor.listen_addr}
               {!isNats && <CopyButton text={sensor.listen_addr} />}
             </span>
           </div>
           {natsTopic && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Topic</span>
-              <span className="flex items-center gap-1 font-mono text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Topic</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontFamily: 'monospace', fontSize: '0.75rem', background: '#1e3a5f', color: '#60a5fa', padding: '0.25rem 0.625rem', borderRadius: '6px', border: '1px solid #2563eb' }}>
                 {natsTopic}
                 <CopyButton text={natsTopic} />
               </span>
@@ -179,31 +167,35 @@ function SensorCard({ sensor, highlight }: { sensor: SensorInfo; highlight: stri
           )}
         </div>
 
-        {/* ── Subsystem pills ── */}
-        <div className="mt-4">
-          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+        {/* Subsystem pills */}
+        <div style={{ marginTop: '1rem' }}>
+          <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>
             Subsystems / Channels ({sensor.subsystems.length})
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(showAll ? sensor.subsystems : highlightedSubs).map((sub, idx) => (
-              <span
-                key={sub}
-                className={`inline-block px-2.5 py-1 rounded-full border text-xs font-medium ${
-                  SUB_PALETTE[idx % SUB_PALETTE.length]
-                }${
-                  highlight && sub.toLowerCase().includes(highlight.toLowerCase())
-                    ? ' ring-2 ring-offset-1 ring-yellow-400'
-                    : ''
-                }`}
-              >
-                {sub.replace(/_/g, ' ')}
-              </span>
-            ))}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+            {(showAll ? sensor.subsystems : highlightedSubs).map((sub, idx) => {
+              const pal = SUB_PALETTE[idx % SUB_PALETTE.length];
+              const isMatch = highlight && sub.toLowerCase().includes(highlight.toLowerCase());
+              return (
+                <span
+                  key={sub}
+                  style={{
+                    padding: '0.25rem 0.625rem', borderRadius: '9999px',
+                    background: pal.bg, border: `1px solid ${pal.color}`,
+                    color: pal.color, fontSize: '0.75rem', fontWeight: 500,
+                    outline: isMatch ? '2px solid #fbbf24' : 'none',
+                    outlineOffset: '2px',
+                  }}
+                >
+                  {sub.replace(/_/g, ' ')}
+                </span>
+              );
+            })}
             {!showAll && highlightedSubs.length === 0 && (
-              <span className="text-xs text-gray-400">No matching subsystems</span>
+              <span style={{ fontSize: '0.75rem', color: '#475569' }}>No matching subsystems</span>
             )}
             {!showAll && highlightedSubs.length < sensor.subsystems.length && (
-              <span className="text-xs text-gray-400 self-center">
+              <span style={{ fontSize: '0.75rem', color: '#475569', alignSelf: 'center' }}>
                 +{sensor.subsystems.length - highlightedSubs.length} more hidden
               </span>
             )}
@@ -211,41 +203,34 @@ function SensorCard({ sensor, highlight }: { sensor: SensorInfo; highlight: stri
         </div>
       </div>
 
-      {/* ── Config toggle ── */}
-      <div className="border-t border-gray-100">
+      {/* Config toggle */}
+      <div style={{ borderTop: '1px solid #334155' }}>
         <button
           onClick={() => setShowConfig((v) => !v)}
-          className="w-full flex items-center justify-between px-6 py-3 text-sm text-gray-500 hover:bg-gray-50 transition-colors font-medium"
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '0.75rem 1.5rem', background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: '0.875rem', color: '#64748b', fontWeight: 500,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#0f172a')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
         >
-          <span className="flex items-center gap-2">
-            <span className="text-gray-400">⚙️</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>⚙️</span>
             Default Configuration
-            <span className="text-xs text-gray-400">
+            <span style={{ fontSize: '0.75rem', color: '#334155' }}>
               ({Object.keys(sensor.config).length} keys)
             </span>
           </span>
-          <span className={`transition-transform duration-200 ${showConfig ? 'rotate-180' : ''}`}>
-            ▾
-          </span>
+          <span style={{ transition: 'transform 0.2s', transform: showConfig ? 'rotate(180deg)' : 'rotate(0deg)', color: '#475569' }}>▾</span>
         </button>
 
         {showConfig && (
-          <div className="border-t border-gray-100">
+          <div style={{ borderTop: '1px solid #334155' }}>
             <ConfigTable config={sensor.config} />
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ─── Summary stat card ────────────────────────────────────────────────────────
-
-function StatPill({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 shadow-sm px-5 py-4 flex items-center gap-4">
-      <p className="text-3xl font-bold text-gray-900">{value}</p>
-      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide leading-tight">{label}</p>
     </div>
   );
 }
@@ -255,8 +240,8 @@ function StatPill({ label, value }: { label: string; value: number | string }) {
 export default function Sensors() {
   const [sensors, setSensors] = useState<SensorInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
+  const [error, setError]     = useState('');
+  const [search, setSearch]   = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -268,6 +253,7 @@ export default function Sensors() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useInterval(load, 30000);
 
   const filteredSensors = useMemo(() => {
     const lc = search.toLowerCase();
@@ -282,112 +268,117 @@ export default function Sensors() {
   }, [sensors, search]);
 
   const totalSubsystems = sensors.reduce((acc, s) => acc + s.subsystems.length, 0);
+  const natsCount       = sensors.filter((s) => s.listen_addr.toLowerCase().includes('nats')).length;
+  const totalConfigKeys = sensors.reduce((acc, s) => acc + Object.keys(s.config).length, 0);
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* ─── Header ───────────────────────────────────────────────────────────── */}
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Sensors</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Deployed sensor adapters, their subsystems, and default configurations
-          </p>
+          <h2>🔬 Sensors</h2>
+          <p>Deployed sensor adapters, their subsystems, and default configurations</p>
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 flex-shrink-0"
-        >
-          {loading ? 'Loading…' : 'Refresh'}
+        <button className="btn-secondary" onClick={load} disabled={loading} style={{ fontSize: '0.875rem', fontWeight: 600, flexShrink: 0, opacity: loading ? 0.5 : 1 }}>
+          {loading ? '…' : '↻ Refresh'}
         </button>
       </div>
 
-      {/* ── Summary stats ── */}
+      {/* ─── Stats strip ──────────────────────────────────────────────────────── */}
       {!loading && sensors.length > 0 && (
-        <div className="grid grid-cols-3 gap-4">
-          <StatPill label="Sensors Deployed" value={sensors.length} />
-          <StatPill label="Active Subsystems" value={totalSubsystems} />
-          <StatPill label="Transport Channels" value="NATS + HTTP" />
+        <div className="card-grid">
+          <div className="card stat-card" style={{ borderLeft: '3px solid #2563eb' }}>
+            <div className="stat-value">{sensors.length}</div>
+            <div className="stat-label">Sensors Deployed</div>
+          </div>
+          <div className="card stat-card" style={{ borderLeft: '3px solid #7c3aed' }}>
+            <div className="stat-value">{totalSubsystems}</div>
+            <div className="stat-label">Active Subsystems</div>
+          </div>
+          <div className="card stat-card" style={{ borderLeft: '3px solid #059669' }}>
+            <div className="stat-value">{natsCount}</div>
+            <div className="stat-label">NATS Transports</div>
+          </div>
+          <div className="card stat-card" style={{ borderLeft: '3px solid #ea580c' }}>
+            <div className="stat-value">{totalConfigKeys}</div>
+            <div className="stat-label">Config Keys Total</div>
+          </div>
         </div>
       )}
 
-      {/* ── Search bar ── */}
+      {/* ─── Search ───────────────────────────────────────────────────────────── */}
       {!loading && sensors.length > 0 && (
-        <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">
-            🔍
-          </span>
-          <input
-            type="text"
-            placeholder="Search sensors, subsystems, or descriptions…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white shadow-sm"
-          />
+        <div className="filter-bar" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', pointerEvents: 'none' }}>🔍</span>
+            <input
+              type="text"
+              placeholder="Search sensors, subsystems, or descriptions…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingLeft: '2.25rem', width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
           {search && (
-            <button
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm"
-            >
-              ✕
+            <button className="btn-secondary" onClick={() => setSearch('')} style={{ fontSize: '0.8125rem', whiteSpace: 'nowrap' }}>
+              Clear
             </button>
+          )}
+          {search && filteredSensors.length > 0 && (
+            <span style={{ fontSize: '0.8125rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+              {filteredSensors.length} of {sensors.length}
+            </span>
           )}
         </div>
       )}
 
-      {/* ── Error ── */}
+      {/* ─── Error ────────────────────────────────────────────────────────────── */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-800 flex items-center gap-2">
-          <span>⚠️</span> {error}
+        <div className="error-msg" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>⚠️ {error}</span>
+          <button onClick={load} style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', fontSize: '0.875rem' }}>
+            Retry
+          </button>
         </div>
       )}
 
-      {/* ── Loading ── */}
+      {/* ─── Loading skeletons ─────────────────────────────────────────────────── */}
       {loading && (
-        <div className="flex items-center justify-center py-16 text-gray-400 text-sm gap-2">
-          <span className="animate-spin">⏳</span> Loading sensors…
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="card loading-skeleton" style={{ height: '10rem' }} />
+          ))}
         </div>
       )}
 
-      {/* ── Empty state ── */}
+      {/* ─── Empty state ──────────────────────────────────────────────────────── */}
       {!loading && sensors.length === 0 && !error && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <p className="text-4xl mb-3">🔬</p>
-          <p className="text-gray-600 font-medium">No sensors available</p>
-          <p className="text-gray-400 text-sm mt-1">
-            Start a sensor adapter to see it here.
-          </p>
+        <div className="card empty-state" style={{ padding: '4rem' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>🔬</div>
+          <div style={{ color: '#94a3b8', fontWeight: 600, marginBottom: '0.25rem' }}>No sensors available</div>
+          <div style={{ color: '#475569', fontSize: '0.875rem' }}>Start a sensor adapter to see it here.</div>
         </div>
       )}
 
-      {/* ── No search results ── */}
+      {/* ─── No search results ────────────────────────────────────────────────── */}
       {!loading && sensors.length > 0 && filteredSensors.length === 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
-          <p className="text-3xl mb-2">🔍</p>
-          <p className="text-gray-600 font-medium">No sensors match "{search}"</p>
-          <button
-            onClick={() => setSearch('')}
-            className="mt-3 text-sm text-blue-600 hover:underline"
-          >
+        <div className="card empty-state">
+          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+          <div style={{ color: '#94a3b8', fontWeight: 600, marginBottom: '0.5rem' }}>No sensors match "{search}"</div>
+          <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontSize: '0.875rem', textDecoration: 'underline' }}>
             Clear search
           </button>
         </div>
       )}
 
-      {/* ── Sensor cards ── */}
+      {/* ─── Sensor cards ─────────────────────────────────────────────────────── */}
       {!loading && filteredSensors.length > 0 && (
-        <div className="space-y-5">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {filteredSensors.map((sensor) => (
             <SensorCard key={sensor.id} sensor={sensor} highlight={search} />
           ))}
         </div>
-      )}
-
-      {/* ── Search result count ── */}
-      {search && filteredSensors.length > 0 && (
-        <p className="text-xs text-gray-400 text-center">
-          Showing {filteredSensors.length} of {sensors.length} sensors
-        </p>
       )}
     </div>
   );

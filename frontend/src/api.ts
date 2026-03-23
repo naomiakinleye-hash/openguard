@@ -167,6 +167,30 @@ export interface SummaryRequest {
   top_event_types: { type: string; count: number }[];
   tier_breakdown: { tier: string; count: number }[];
   incident_statuses: { status: string; count: number }[];
+  // HostGuard
+  host_total_events: number;
+  host_threat_events: number;
+  host_unique_hosts: number;
+  host_active_rules: number;
+  // AgentGuard
+  agent_total_agents: number;
+  agent_active_agents: number;
+  agent_suspended_count: number;
+  agent_quarantine_count: number;
+  agent_total_threats: number;
+  // ModelGuard
+  model_total_calls: number;
+  model_blocked_calls: number;
+  model_avg_latency_ms: number;
+  model_avg_confidence: number;
+  model_risk_breakdown: { label: string; count: number }[];
+  // CommsGuard
+  comms_total_events: number;
+  comms_total_threats: number;
+  comms_top_event_types: { type: string; count: number }[];
+  // Threat / anomaly breakdowns per module
+  host_top_event_types: { type: string; count: number }[];
+  agent_top_event_types: { type: string; count: number }[];
 }
 
 export interface SummaryResponse {
