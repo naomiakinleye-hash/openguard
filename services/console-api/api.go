@@ -71,6 +71,9 @@ type Server struct {
 
 	// commsConfig holds runtime configuration for all CommsGuard channels.
 	commsConfig *commsConfig
+
+	// agentGuardStore holds the in-memory agent registry for the AgentGuard console.
+	agentGuardStore *agentStore
 }
 
 // NewServer constructs a new console API Server.
@@ -127,6 +130,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		requestDuration: reqDuration,
 		credentials:     creds,
 		commsConfig:     newCommsConfig(),
+		agentGuardStore: newAgentStore(),
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -200,6 +204,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/commsguard/events", s.handleCommsGuardEvents)
 	mux.HandleFunc("/api/v1/commsguard/channels", s.handleCommsGuardChannels)
 	mux.HandleFunc("/api/v1/commsguard/config", s.handleCommsGuardConfig)
+
+	// AgentGuard-specific endpoints.
+	mux.HandleFunc("/api/v1/agentguard/stats", s.handleAgentGuardStats)
+	mux.HandleFunc("/api/v1/agentguard/agents", s.handleAgentGuardAgents)
+	mux.HandleFunc("/api/v1/agentguard/agents/", s.handleAgentGuardAgentsPrefix)
+	mux.HandleFunc("/api/v1/agentguard/events", s.handleAgentGuardEvents)
+	mux.HandleFunc("/api/v1/agentguard/rules", s.handleAgentGuardRules)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)

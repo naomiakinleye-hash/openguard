@@ -178,6 +178,75 @@ export interface SummaryResponse {
 
 export type IncidentDetailResponse = Incident;
 
+// ─── AgentGuard types ────────────────────────────────────────────────────────
+
+export interface AgentRecord {
+  agent_id: string;
+  agent_name: string;
+  agent_type: string;
+  approved_tools: string[];
+  approved_domains: string[];
+  token_quota: number;
+  call_quota: number;
+  suspended: boolean;
+  quarantined: boolean;
+  registered_at: string;
+  last_activity_at?: string;
+  threat_count: number;
+  action_count: number;
+}
+
+export interface AgentEventTypeStat {
+  type: string;
+  count: number;
+}
+
+export interface AgentStatsResponse {
+  total_agents: number;
+  active_agents: number;
+  suspended_count: number;
+  quarantine_count: number;
+  total_threats: number;
+  total_actions: number;
+  event_types: AgentEventTypeStat[];
+  period: string;
+  computed_at: string;
+}
+
+export interface AgentListResponse {
+  agents: AgentRecord[];
+  total: number;
+}
+
+export interface AgentEventsResponse {
+  events: Record<string, unknown>[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AgentRule {
+  id: string;
+  name: string;
+  description: string;
+  severity: string;
+  tier: string;
+  responses: string[];
+  enabled: boolean;
+}
+
+export interface AgentRulesResponse {
+  rules: AgentRule[];
+  total: number;
+}
+
+export interface AgentActionResponse {
+  agent_id: string;
+  suspended?: boolean;
+  unsuspended?: boolean;
+  quarantined?: boolean;
+}
+
 // ─── CommsGuard types ─────────────────────────────────────────────────────────
 
 export interface CommsChannel {
@@ -272,6 +341,19 @@ export const api = {
   summary: (body: SummaryRequest) => postJSON<SummaryResponse>('/api/v1/summary', body),
   login: (username: string, password: string) =>
     postJSON<LoginResponse>('/api/v1/login', { username, password }),
+
+  // AgentGuard endpoints
+  agentStats: () => get<AgentStatsResponse>('/api/v1/agentguard/stats'),
+  agentList: () => get<AgentListResponse>('/api/v1/agentguard/agents'),
+  agentDetail: (id: string) => get<AgentRecord>(`/api/v1/agentguard/agents/${encodeURIComponent(id)}`),
+  agentEvents: (agentId?: string, eventType?: string, page?: number) =>
+    get<AgentEventsResponse>(
+      `/api/v1/agentguard/events${buildQuery({ agent_id: agentId, event_type: eventType, page: page !== undefined ? String(page) : undefined })}`,
+    ),
+  agentRules: () => get<AgentRulesResponse>('/api/v1/agentguard/rules'),
+  suspendAgent: (id: string) => post<AgentActionResponse>(`/api/v1/agentguard/agents/${encodeURIComponent(id)}/suspend`),
+  unsuspendAgent: (id: string) => post<AgentActionResponse>(`/api/v1/agentguard/agents/${encodeURIComponent(id)}/unsuspend`),
+  quarantineAgent: (id: string) => post<AgentActionResponse>(`/api/v1/agentguard/agents/${encodeURIComponent(id)}/quarantine`),
 
   // CommsGuard endpoints
   commsStats: () => get<CommsStatsResponse>('/api/v1/commsguard/stats'),

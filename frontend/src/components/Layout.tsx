@@ -9,6 +9,7 @@ const NAV = [
   { to: '/audit', label: '📋 Audit Log' },
   { to: '/sensors', label: '🔬 Sensors' },
   { to: '/commsguard', label: '💬 CommsGuard' },
+  { to: '/agentguard', label: '🤖 AgentGuard' },
   { to: '/models', label: '🤖 AI Models' },
 ];
 

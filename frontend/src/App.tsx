@@ -14,6 +14,7 @@ import ModelSettings from './pages/ModelSettings';
 import Login from './pages/Login';
 import NotFound from './pages/NotFound';
 import CommsGuard from './pages/CommsGuard';
+import AgentGuard from './pages/AgentGuard';
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
                 <Route path="sensors" element={<Sensors />} />
                 <Route path="models" element={<ModelSettings />} />
                 <Route path="commsguard" element={<CommsGuard />} />
+                <Route path="agentguard" element={<AgentGuard />} />
               </Route>
             </Route>
             <Route path="*" element={<NotFound />} />
