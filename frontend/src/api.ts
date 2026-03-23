@@ -42,6 +42,17 @@ async function del<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Build a query string from a record, omitting undefined/empty values. */
+function buildQuery(params: Record<string, string | undefined>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') {
+      parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+    }
+  }
+  return parts.length > 0 ? `?${parts.join('&')}` : '';
+}
+
 // ─── Response shapes ─────────────────────────────────────────────────────────
 
 export interface LoginResponse {
@@ -167,6 +178,75 @@ export interface SummaryResponse {
 
 export type IncidentDetailResponse = Incident;
 
+// ─── CommsGuard types ─────────────────────────────────────────────────────────
+
+export interface CommsChannel {
+  id: string;
+  name: string;
+  icon: string;
+  webhook_path: string;
+  description: string;
+  configured: boolean;
+  enabled?: boolean;
+  message_count?: number;
+  threat_count?: number;
+  last_event?: string;
+}
+
+export interface CommsEventTypeStat {
+  type: string;
+  count: number;
+}
+
+export interface CommsStatsResponse {
+  channels: CommsChannel[];
+  event_types: CommsEventTypeStat[];
+  total_events: number;
+  total_threats: number;
+  period: string;
+  computed_at: string;
+}
+
+export interface CommsChannelsResponse {
+  channels: CommsChannel[];
+}
+
+export interface CommsEventsResponse {
+  events: Event[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CommsChannelConfigItem {
+  id: string;
+  enabled: boolean;
+  has_webhook_secret: boolean;
+  has_verify_token: boolean;
+  has_account_sid: boolean;
+  has_bearer_token: boolean;
+  has_bot_token: boolean;
+  webhook_url?: string;
+}
+
+export interface CommsConfigResponse {
+  channels: CommsChannelConfigItem[];
+  enable_content_analysis: boolean;
+  bulk_message_threshold: number;
+  bulk_message_window_sec: number;
+}
+
+export interface CommsChannelUpdate {
+  id: string;
+  enabled: boolean;
+  webhook_secret?: string;
+  verify_token?: string;
+  account_sid?: string;
+  bearer_token?: string;
+  bot_token?: string;
+  webhook_url?: string;
+}
+
 // ─── API functions ───────────────────────────────────────────────────────────
 
 export const api = {
@@ -192,4 +272,15 @@ export const api = {
   summary: (body: SummaryRequest) => postJSON<SummaryResponse>('/api/v1/summary', body),
   login: (username: string, password: string) =>
     postJSON<LoginResponse>('/api/v1/login', { username, password }),
+
+  // CommsGuard endpoints
+  commsStats: () => get<CommsStatsResponse>('/api/v1/commsguard/stats'),
+  commsChannels: () => get<CommsChannelsResponse>('/api/v1/commsguard/channels'),
+  commsEvents: (channel?: string, page?: number) =>
+    get<CommsEventsResponse>(
+      `/api/v1/commsguard/events${buildQuery({ channel, page: page !== undefined ? String(page) : undefined })}`,
+    ),
+  commsConfig: () => get<CommsConfigResponse>('/api/v1/commsguard/config'),
+  updateCommsChannel: (channel: CommsChannelUpdate) =>
+    postJSON<{ status: string }>('/api/v1/commsguard/config', { channel }),
 };

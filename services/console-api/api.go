@@ -68,6 +68,9 @@ type Server struct {
 	// oauthStates holds in-flight OAuth2 state tokens for CSRF protection.
 	// Key: state string. Value: *oauthState. States expire after 10 minutes.
 	oauthStates sync.Map
+
+	// commsConfig holds runtime configuration for all CommsGuard channels.
+	commsConfig *commsConfig
 }
 
 // NewServer constructs a new console API Server.
@@ -123,6 +126,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		requestsTotal:   reqTotal,
 		requestDuration: reqDuration,
 		credentials:     creds,
+		commsConfig:     newCommsConfig(),
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -190,6 +194,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/models/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/v1/system/stats", s.handleSystemStats)
 	mux.HandleFunc("/api/v1/summary", s.handleSummary)
+
+	// CommsGuard-specific endpoints.
+	mux.HandleFunc("/api/v1/commsguard/stats", s.handleCommsGuardStats)
+	mux.HandleFunc("/api/v1/commsguard/events", s.handleCommsGuardEvents)
+	mux.HandleFunc("/api/v1/commsguard/channels", s.handleCommsGuardChannels)
+	mux.HandleFunc("/api/v1/commsguard/config", s.handleCommsGuardConfig)
 
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
