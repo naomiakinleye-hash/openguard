@@ -387,7 +387,6 @@ export default function Dashboard() {
           {sysStats && sysStats.mem_total_mb > 0 ? (() => {
             const APP_COLORS = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#06b6d4','#10b981','#f97316'];
             const usedPct  = Math.min(100, sysStats.mem_used_pct);
-            const usedColor = usedPct >= 85 ? '#dc2626' : usedPct >= 60 ? '#d97706' : '#16a34a';
             const apps = sysStats.mem_apps ?? [];
             // Build segmented bar from per-app RSS; remainder shown as free
             const totalMB = sysStats.mem_total_mb;
