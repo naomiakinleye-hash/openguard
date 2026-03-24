@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
-import type { AgentRecord, AgentStatsResponse, AgentRule } from '../api';
+import type { AgentRecord, AgentStatsResponse, AgentRule, AgentGuardConfigResponse, ConfiguredAgentRule, RuleOverride, AgentToolConfig } from '../api';
 import { useInterval } from '../hooks/useInterval';
+import { useToast } from '../contexts/ToastContext';
 import Pagination from '../components/Pagination';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -222,7 +223,7 @@ export default function AgentGuard() {
   const [selectedAgent, setSelectedAgent] = useState<AgentRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'agents' | 'events' | 'rules'>('agents');
+  const [tab, setTab] = useState<'agents' | 'events' | 'rules' | 'config'>('agents');
   const [events, setEvents] = useState<Record<string, unknown>[]>([]);
   const [eventsTotal, setEventsTotal] = useState(0);
   const [agentFilter, setAgentFilter] = useState('');
@@ -230,6 +231,25 @@ export default function AgentGuard() {
   const [eventsPage, setEventsPage] = useState(1);
   const [agentSearch, setAgentSearch] = useState('');
   const [ruleSearch, setRuleSearch] = useState('');
+
+  // ── Config tab state ───────────────────────────────────────────────────────
+  const { addToast } = useToast();
+  const [configData, setConfigData] = useState<AgentGuardConfigResponse | null>(null);
+  const [toolsList, setToolsList] = useState<AgentToolConfig[]>([]);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+
+  // Rule override edit modal
+  const [ruleEditTarget, setRuleEditTarget] = useState<ConfiguredAgentRule | null>(null);
+  const [ruleEditForm, setRuleEditForm] = useState<RuleOverride>({ enabled: true, severity: '', tier: '' });
+  const [savingRuleId, setSavingRuleId] = useState<string | null>(null);
+
+  // Tool CRUD state
+  const [toolModal, setToolModal] = useState<'add' | 'edit' | null>(null);
+  const [toolEditId, setToolEditId] = useState<string | null>(null);
+  const [toolForm, setToolForm] = useState<AgentToolConfig>({ agent_id: '', agent_name: '', approved_tools: [], approved_domains: [], token_quota: 0, call_quota: 0 });
+  const [savingTool, setSavingTool] = useState(false);
+  const [deletingToolId, setDeletingToolId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -262,7 +282,109 @@ export default function AgentGuard() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (tab === 'events') void loadEvents(); }, [tab, loadEvents]);
+  useEffect(() => { if (tab === 'config') void loadConfig(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   useInterval(load, 20000);
+
+  const loadConfig = useCallback(async () => {
+    setConfigLoading(true);
+    setConfigError(null);
+    try {
+      const [cfg, tls] = await Promise.all([api.configAgentGuard(), api.listAgentTools()]);
+      setConfigData(cfg);
+      setToolsList(tls.tools ?? []);
+    } catch (e) {
+      setConfigError(String(e));
+    } finally {
+      setConfigLoading(false);
+    }
+  }, []);
+
+  const openRuleEdit = (rule: ConfiguredAgentRule) => {
+    setRuleEditTarget(rule);
+    setRuleEditForm({ enabled: rule.enabled, severity: rule.severity, tier: String(rule.tier) });
+  };
+
+  const saveRuleOverride = async () => {
+    if (!ruleEditTarget) return;
+    setSavingRuleId(ruleEditTarget.id);
+    try {
+      await api.updateAgentGuardRule(ruleEditTarget.id, ruleEditForm);
+      addToast('Rule override saved', 'success');
+      setRuleEditTarget(null);
+      void loadConfig();
+    } catch (e) {
+      addToast(String(e), 'error');
+    } finally {
+      setSavingRuleId(null);
+    }
+  };
+
+  const toggleRuleEnabled = async (rule: ConfiguredAgentRule) => {
+    setSavingRuleId(rule.id);
+    try {
+      await api.updateAgentGuardRule(rule.id, { enabled: !rule.enabled, severity: rule.severity, tier: String(rule.tier) });
+      addToast(`Rule ${rule.enabled ? 'disabled' : 'enabled'}`, 'success');
+      void loadConfig();
+    } catch (e) {
+      addToast(String(e), 'error');
+    } finally {
+      setSavingRuleId(null);
+    }
+  };
+
+  const openAddTool = () => {
+    setToolForm({ agent_id: '', agent_name: '', approved_tools: [], approved_domains: [], token_quota: 0, call_quota: 0 });
+    setToolEditId(null);
+    setToolModal('add');
+  };
+
+  const openEditTool = (t: AgentToolConfig) => {
+    setToolForm({ ...t });
+    setToolEditId(t.agent_id);
+    setToolModal('edit');
+  };
+
+  const saveTool = async () => {
+    setSavingTool(true);
+    try {
+      const payload = {
+        ...toolForm,
+        approved_tools: typeof toolForm.approved_tools === 'string'
+          ? (toolForm.approved_tools as string).split(',').map(s => s.trim()).filter(Boolean)
+          : toolForm.approved_tools,
+        approved_domains: typeof toolForm.approved_domains === 'string'
+          ? (toolForm.approved_domains as string).split(',').map(s => s.trim()).filter(Boolean)
+          : toolForm.approved_domains,
+      };
+      if (toolModal === 'add') {
+        await api.createAgentTool(payload);
+        addToast('Tool configuration created', 'success');
+      } else if (toolEditId) {
+        await api.updateAgentTool(toolEditId, payload);
+        addToast('Tool configuration updated', 'success');
+      }
+      setToolModal(null);
+      void loadConfig();
+    } catch (e) {
+      addToast(String(e), 'error');
+    } finally {
+      setSavingTool(false);
+    }
+  };
+
+  const deleteTool = async (id: string) => {
+    if (!confirm(`Delete tool config for agent "${id}"?`)) return;
+    setDeletingToolId(id);
+    try {
+      await api.deleteAgentTool(id);
+      addToast('Tool configuration deleted', 'success');
+      void loadConfig();
+    } catch (e) {
+      addToast(String(e), 'error');
+    } finally {
+      setDeletingToolId(null);
+    }
+  };
 
   const maxEventTypeCount = (stats?.event_types ?? []).reduce((m, e) => Math.max(m, e.count), 1);
 
@@ -347,7 +469,7 @@ export default function AgentGuard() {
 
       {/* ── Tabs ─────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', borderBottom: '1px solid #334155' }}>
-        {(['agents', 'events', 'rules'] as const).map(t => (
+        {(['agents', 'events', 'rules', 'config'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -364,7 +486,7 @@ export default function AgentGuard() {
               marginBottom: '-1px',
             }}
           >
-            {t === 'agents' ? 'Agent Registry' : t === 'events' ? 'Threat Events' : 'Detection Rules'}
+            {t === 'agents' ? 'Agent Registry' : t === 'events' ? 'Threat Events' : t === 'rules' ? 'Detection Rules' : '⚙️ Configuration'}
           </button>
         ))}
       </div>
@@ -570,6 +692,213 @@ export default function AgentGuard() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Tab: Configuration ── */}
+      {tab === 'config' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {configLoading && <div className="loading-skeleton" style={{ height: '6rem', borderRadius: '8px' }} />}
+          {configError && (
+            <div className="error-msg" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>⚠️ {configError}</span>
+              <button onClick={() => void loadConfig()} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Retry</button>
+            </div>
+          )}
+
+          {/* Detection Rule Overrides */}
+          {configData && (
+            <div className="table-card">
+              <div className="table-header">Detection Rule Overrides</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #334155' }}>
+                      {['Rule', 'Severity', 'Tier', 'Enabled', ''].map(h => (
+                        <th key={h} style={{ padding: '0.625rem 1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {configData.rules.length === 0 ? (
+                      <tr><td colSpan={5} className="empty-state">No rules configured</td></tr>
+                    ) : configData.rules.map(rule => (
+                      <tr key={rule.id} style={{ borderBottom: '1px solid #1e293b' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#0f172a')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{rule.name}</div>
+                          <code style={{ fontSize: '0.7rem', color: '#475569' }}>{rule.id}</code>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}><SeverityBadge severity={rule.severity} /></td>
+                        <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', fontSize: '0.8125rem' }}>Tier {rule.tier}</td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <button
+                            disabled={savingRuleId === rule.id}
+                            onClick={() => void toggleRuleEnabled(rule)}
+                            style={{ padding: '0.25rem 0.75rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, cursor: savingRuleId === rule.id ? 'not-allowed' : 'pointer', border: 'none', ...(rule.enabled ? { background: '#14532d', color: '#86efac' } : { background: '#1e293b', color: '#475569' }) }}
+                          >
+                            {rule.enabled ? 'Enabled' : 'Disabled'}
+                          </button>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                          <button
+                            onClick={() => openRuleEdit(rule)}
+                            style={{ fontSize: '0.75rem', color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                          >Edit</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Agent Tool Allowlists */}
+          <div className="table-card">
+            <div className="table-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Agent Tool Allowlists</span>
+              <button
+                onClick={openAddTool}
+                style={{ fontSize: '0.8125rem', fontWeight: 600, padding: '0.375rem 0.875rem', borderRadius: '6px', background: '#1d4ed8', color: '#fff', border: 'none', cursor: 'pointer' }}
+              >+ Add Agent</button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                    {['Agent', 'Approved Tools', 'Approved Domains', 'Token Quota', 'Call Quota', ''].map(h => (
+                      <th key={h} style={{ padding: '0.625rem 1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {toolsList.length === 0 ? (
+                    <tr><td colSpan={6} className="empty-state">No agent tool configurations — click "+ Add Agent" to create one</td></tr>
+                  ) : toolsList.map(tool => (
+                    <tr key={tool.agent_id} style={{ borderBottom: '1px solid #1e293b' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#0f172a')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{tool.agent_name}</div>
+                        <code style={{ fontSize: '0.7rem', color: '#475569' }}>{tool.agent_id}</code>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', fontSize: '0.8125rem' }}>{tool.approved_tools.join(', ') || <span style={{ color: '#475569' }}>All</span>}</td>
+                      <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', fontSize: '0.8125rem' }}>{tool.approved_domains.join(', ') || <span style={{ color: '#475569' }}>All</span>}</td>
+                      <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', textAlign: 'right' }}>{tool.token_quota === 0 ? '∞' : tool.token_quota.toLocaleString()}</td>
+                      <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', textAlign: 'right' }}>{tool.call_quota === 0 ? '∞' : tool.call_quota.toLocaleString()}</td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                          <button onClick={() => openEditTool(tool)} style={{ fontSize: '0.75rem', color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Edit</button>
+                          <button
+                            disabled={deletingToolId === tool.agent_id}
+                            onClick={() => void deleteTool(tool.agent_id)}
+                            style={{ fontSize: '0.75rem', color: '#f87171', background: 'none', border: 'none', cursor: deletingToolId === tool.agent_id ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                          >Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rule Override Modal ── */}
+      {ruleEditTarget && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
+          onClick={e => { if (e.target === e.currentTarget) setRuleEditTarget(null); }}>
+          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '12px', width: '100%', maxWidth: '420px', padding: '1.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+              <h3 style={{ color: '#f1f5f9', fontWeight: 700, margin: 0 }}>Edit Rule Override</h3>
+              <button onClick={() => setRuleEditTarget(null)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '1.25rem', cursor: 'pointer' }}>&times;</button>
+            </div>
+            <p style={{ fontSize: '0.8125rem', color: '#64748b', marginBottom: '1.25rem' }}>{ruleEditTarget.name}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                <input type="checkbox" checked={ruleEditForm.enabled} onChange={e => setRuleEditForm(f => ({ ...f, enabled: e.target.checked }))} />
+                Enabled
+              </label>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.375rem' }}>Severity Override</label>
+                <select
+                  value={ruleEditForm.severity ?? ''}
+                  onChange={e => setRuleEditForm(f => ({ ...f, severity: e.target.value }))}
+                  style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', color: '#e2e8f0', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem' }}
+                >
+                  <option value="">— keep default —</option>
+                  {['critical', 'high', 'medium', 'low', 'info'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.375rem' }}>Tier Override</label>
+                <select
+                  value={ruleEditForm.tier ?? ''}
+                  onChange={e => setRuleEditForm(f => ({ ...f, tier: e.target.value }))}
+                  style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', color: '#e2e8f0', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem' }}
+                >
+                  <option value="">— keep default —</option>
+                  {['1', '2', '3'].map(t => <option key={t} value={t}>Tier {t}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
+              <button
+                disabled={savingRuleId !== null}
+                onClick={() => void saveRuleOverride()}
+                style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#1d4ed8', color: '#fff', border: 'none', fontWeight: 600, cursor: savingRuleId !== null ? 'not-allowed' : 'pointer' }}
+              >{savingRuleId ? 'Saving…' : 'Save'}</button>
+              <button onClick={() => setRuleEditTarget(null)} style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#0f172a', color: '#94a3b8', border: '1px solid #334155', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tool Add/Edit Modal ── */}
+      {toolModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
+          onClick={e => { if (e.target === e.currentTarget) setToolModal(null); }}>
+          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '12px', width: '100%', maxWidth: '520px', padding: '1.5rem', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+              <h3 style={{ color: '#f1f5f9', fontWeight: 700, margin: 0 }}>{toolModal === 'add' ? 'Add Agent Tool Config' : 'Edit Agent Tool Config'}</h3>
+              <button onClick={() => setToolModal(null)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '1.25rem', cursor: 'pointer' }}>&times;</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {([
+                { key: 'agent_id', label: 'Agent ID', type: 'text', placeholder: 'e.g. agent-finance' },
+                { key: 'agent_name', label: 'Agent Name', type: 'text', placeholder: 'e.g. Finance Agent' },
+                { key: 'approved_tools', label: 'Approved Tools (comma-separated)', type: 'text', placeholder: 'e.g. calculator,file_reader' },
+                { key: 'approved_domains', label: 'Approved Domains (comma-separated)', type: 'text', placeholder: 'e.g. finance.internal,reporting.internal' },
+                { key: 'token_quota', label: 'Token Quota (0 = unlimited)', type: 'number', placeholder: '0' },
+                { key: 'call_quota', label: 'Call Quota (0 = unlimited)', type: 'number', placeholder: '0' },
+              ] as const).map(field => (
+                <div key={field.key}>
+                  <label style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.375rem' }}>{field.label}</label>
+                  <input
+                    type={field.type}
+                    disabled={toolModal === 'edit' && field.key === 'agent_id'}
+                    placeholder={field.placeholder}
+                    value={field.key === 'approved_tools' || field.key === 'approved_domains'
+                      ? (Array.isArray(toolForm[field.key]) ? (toolForm[field.key] as string[]).join(', ') : String(toolForm[field.key] ?? ''))
+                      : String(toolForm[field.key] ?? '')}
+                    onChange={e => setToolForm(f => ({ ...f, [field.key]: field.type === 'number' ? Number(e.target.value) : e.target.value }))}
+                    style={{ width: '100%', background: toolModal === 'edit' && field.key === 'agent_id' ? '#0a1120' : '#0f172a', border: '1px solid #334155', color: '#e2e8f0', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.875rem', boxSizing: 'border-box' }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
+              <button
+                disabled={savingTool}
+                onClick={() => void saveTool()}
+                style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#1d4ed8', color: '#fff', border: 'none', fontWeight: 600, cursor: savingTool ? 'not-allowed' : 'pointer' }}
+              >{savingTool ? 'Saving…' : 'Save'}</button>
+              <button onClick={() => setToolModal(null)} style={{ flex: 1, padding: '0.5rem', borderRadius: '6px', background: '#0f172a', color: '#94a3b8', border: '1px solid #334155', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </div>
         </div>
       )}
 
