@@ -6,6 +6,8 @@ import type {
   ProviderHealthEntry,
   GuardrailConfig,
   KvStat,
+  PolicyRule,
+  PolicyRuleInput,
 } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { useInterval } from '../hooks/useInterval';
@@ -338,6 +340,376 @@ function GuardrailsPanel({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+const ACTION_COLORS: Record<string, { color: string; bg: string; border: string }> = {
+  block:            { color: '#f87171', bg: '#450a0a', border: '#dc2626' },
+  require_approval: { color: '#fbbf24', bg: '#422006', border: '#d97706' },
+  allow:            { color: '#4ade80', bg: '#052e16', border: '#16a34a' },
+};
+
+function ActionBadge({ action }: { action: string }) {
+  const s = ACTION_COLORS[action] ?? { color: '#94a3b8', bg: '#1e293b', border: '#475569' };
+  const label = action === 'require_approval' ? 'Req. Approval' : action;
+  return (
+    <span style={{
+      display: 'inline-block', padding: '0.125rem 0.5rem',
+      borderRadius: '9999px', border: `1px solid ${s.border}`,
+      background: s.bg, color: s.color,
+      fontSize: '0.75rem', fontWeight: 700, textTransform: 'capitalize',
+      whiteSpace: 'nowrap',
+    }}>
+      {label}
+    </span>
+  );
+}
+
+// ─── PolicyEditor: inline create / edit form ─────────────────────────────────
+
+type PolicyDraft = {
+  id?: string;
+  description: string;
+  action: 'block' | 'require_approval' | 'allow';
+  policy_ref: string;
+  enabled: boolean;
+  conditions: string; // newline-separated
+};
+
+const EMPTY_DRAFT: PolicyDraft = {
+  description: '', action: 'block', policy_ref: '', enabled: true, conditions: '',
+};
+
+function PolicyEditorRow({
+  draft,
+  onChangeDraft,
+  onSave,
+  onCancel,
+  saving,
+}: {
+  draft: PolicyDraft;
+  onChangeDraft: (d: PolicyDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  const fieldStyle: React.CSSProperties = {
+    width: '100%', background: '#0f172a', border: '1px solid #334155',
+    borderRadius: '5px', padding: '0.375rem 0.625rem',
+    fontSize: '0.8125rem', color: '#e2e8f0', boxSizing: 'border-box',
+  };
+  return (
+    <tr style={{ background: '#0d1e35' }}>
+      <td colSpan={6} style={{ padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Description *
+            </label>
+            <input
+              style={fieldStyle}
+              value={draft.description}
+              onChange={(e) => onChangeDraft({ ...draft, description: e.target.value })}
+              placeholder="Describe what this rule does…"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Policy Ref
+            </label>
+            <input
+              style={fieldStyle}
+              value={draft.policy_ref}
+              onChange={(e) => onChangeDraft({ ...draft, policy_ref: e.target.value })}
+              placeholder="e.g. C-001"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Action *
+            </label>
+            <select
+              style={{ ...fieldStyle, cursor: 'pointer' }}
+              value={draft.action}
+              onChange={(e) => onChangeDraft({ ...draft, action: e.target.value as PolicyDraft['action'] })}
+            >
+              <option value="block">Block</option>
+              <option value="require_approval">Require Approval</option>
+              <option value="allow">Allow</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Conditions (one per line)
+            </label>
+            <textarea
+              style={{ ...fieldStyle, resize: 'vertical', minHeight: '4rem' }}
+              value={draft.conditions}
+              onChange={(e) => onChangeDraft({ ...draft, conditions: e.target.value })}
+              placeholder="e.g. action=disable_logging"
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            onClick={onSave}
+            disabled={saving || !draft.description.trim()}
+            style={{
+              padding: '0.375rem 1rem', borderRadius: '5px',
+              background: saving || !draft.description.trim() ? '#334155' : '#1d4ed8',
+              color: '#f1f5f9', border: 'none',
+              cursor: saving || !draft.description.trim() ? 'not-allowed' : 'pointer',
+              fontSize: '0.8125rem', fontWeight: 600,
+            }}
+          >
+            {saving ? 'Saving…' : draft.id ? 'Update Rule' : 'Create Rule'}
+          </button>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '0.375rem 1rem', borderRadius: '5px', background: 'none',
+              color: '#64748b', border: '1px solid #334155',
+              cursor: 'pointer', fontSize: '0.8125rem', fontWeight: 600,
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ─── PoliciesPanel ────────────────────────────────────────────────────────────
+
+function PoliciesPanel({
+  policies,
+  loading,
+  onToggle,
+  onSave,
+  onDelete,
+}: {
+  policies: PolicyRule[];
+  loading: boolean;
+  onToggle: (rule: PolicyRule) => Promise<void>;
+  onSave: (draft: PolicyDraft, original: PolicyRule | null) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<PolicyDraft>(EMPTY_DRAFT);
+  const [showNew, setShowNew] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  function startEdit(rule: PolicyRule) {
+    setShowNew(false);
+    setEditingId(rule.id);
+    setDraft({ ...rule, conditions: rule.conditions.join('\n') });
+  }
+
+  function startNew() {
+    setEditingId(null);
+    setShowNew(true);
+    setDraft(EMPTY_DRAFT);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setShowNew(false);
+    setDraft(EMPTY_DRAFT);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const original = editingId ? (policies.find((p) => p.id === editingId) ?? null) : null;
+      await onSave(draft, original);
+      setEditingId(null);
+      setShowNew(false);
+      setDraft(EMPTY_DRAFT);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const BUILTIN_PREFIX = /^B-(BLOCK|APPROVE|ALLOW)-\d{3}$/;
+  const isBuiltin = (id: string) => BUILTIN_PREFIX.test(id);
+
+  return (
+    <div className="table-card">
+      <div className="table-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Baseline Policies</span>
+        <button
+          onClick={startNew}
+          style={{
+            padding: '0.375rem 0.875rem', borderRadius: '5px',
+            background: '#1d4ed8', color: '#f1f5f9', border: 'none',
+            cursor: 'pointer', fontSize: '0.8125rem', fontWeight: 600,
+          }}
+        >
+          + New Rule
+        </button>
+      </div>
+
+      {loading && (
+        <div className="empty-state" style={{ padding: '2rem' }}>Loading policies…</div>
+      )}
+
+      {!loading && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
+            <thead>
+              <tr style={{ background: '#0f172a', borderBottom: '1px solid #334155' }}>
+                {['ID', 'Description', 'Action', 'Policy Ref', 'Status', 'Actions'].map((h) => (
+                  <th key={h} style={{
+                    padding: '0.75rem 1rem', textAlign: 'left',
+                    color: '#64748b', fontWeight: 600, fontSize: '0.75rem',
+                    textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap',
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {showNew && (
+                <PolicyEditorRow
+                  draft={draft}
+                  onChangeDraft={setDraft}
+                  onSave={() => void handleSave()}
+                  onCancel={cancelEdit}
+                  saving={saving}
+                />
+              )}
+              {policies.length === 0 && !showNew && (
+                <tr>
+                  <td colSpan={6} className="empty-state">No policy rules found.</td>
+                </tr>
+              )}
+              {policies.map((rule, idx) => (
+                <>
+                  <tr
+                    key={rule.id}
+                    style={{
+                      borderTop: idx > 0 || showNew ? '1px solid #1e293b' : 'none',
+                      opacity: rule.enabled ? 1 : 0.55,
+                    }}
+                  >
+                    <td style={{ padding: '0.75rem 1rem' }}>
+                      <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#94a3b8' }}>{rule.id}</span>
+                    </td>
+                    <td style={{ padding: '0.75rem 1rem', color: '#e2e8f0', maxWidth: '22rem' }}>
+                      {rule.description}
+                      {rule.conditions.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.25rem' }}>
+                          {rule.conditions.map((c) => (
+                            <span key={c} style={{ padding: '0.1rem 0.375rem', background: '#0f172a', border: '1px solid #334155', borderRadius: '3px', fontSize: '0.7rem', color: '#64748b', fontFamily: 'monospace' }}>
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: '0.75rem 1rem' }}>
+                      <ActionBadge action={rule.action} />
+                    </td>
+                    <td style={{ padding: '0.75rem 1rem', color: '#94a3b8', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                      {rule.policy_ref || '—'}
+                    </td>
+                    <td style={{ padding: '0.75rem 1rem' }}>
+                      <button
+                        onClick={() => void onToggle(rule)}
+                        style={{
+                          position: 'relative', display: 'inline-flex', height: '1.25rem', width: '2.25rem',
+                          alignItems: 'center', borderRadius: '9999px', flexShrink: 0,
+                          background: rule.enabled ? '#1d4ed8' : '#334155',
+                          border: 'none', cursor: 'pointer', transition: 'background 0.2s',
+                        }}
+                        role="switch"
+                        aria-checked={rule.enabled}
+                        title={rule.enabled ? 'Disable' : 'Enable'}
+                      >
+                        <span style={{
+                          display: 'inline-block', height: '0.875rem', width: '0.875rem',
+                          borderRadius: '50%', background: '#f1f5f9',
+                          transform: rule.enabled ? 'translateX(1.25rem)' : 'translateX(0.1875rem)',
+                          transition: 'transform 0.2s',
+                        }} />
+                      </button>
+                    </td>
+                    <td style={{ padding: '0.75rem 1rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <button
+                          onClick={() => editingId === rule.id ? cancelEdit() : startEdit(rule)}
+                          style={{
+                            padding: '0.25rem 0.625rem', borderRadius: '4px',
+                            background: editingId === rule.id ? '#334155' : 'none',
+                            border: '1px solid #334155', color: '#94a3b8',
+                            cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+                          }}
+                        >
+                          {editingId === rule.id ? 'Cancel' : 'Edit'}
+                        </button>
+                        {!isBuiltin(rule.id) && (
+                          confirmDelete === rule.id ? (
+                            <div style={{ display: 'flex', gap: '0.25rem' }}>
+                              <button
+                                onClick={() => void onDelete(rule.id)}
+                                style={{
+                                  padding: '0.25rem 0.625rem', borderRadius: '4px',
+                                  background: '#450a0a', border: '1px solid #dc2626',
+                                  color: '#f87171', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+                                }}
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setConfirmDelete(null)}
+                                style={{
+                                  padding: '0.25rem 0.5rem', borderRadius: '4px',
+                                  background: 'none', border: '1px solid #334155',
+                                  color: '#64748b', cursor: 'pointer', fontSize: '0.75rem',
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDelete(rule.id)}
+                              style={{
+                                padding: '0.25rem 0.625rem', borderRadius: '4px',
+                                background: 'none', border: '1px solid #7f1d1d',
+                                color: '#f87171', cursor: 'pointer', fontSize: '0.75rem',
+                              }}
+                            >
+                              Delete
+                            </button>
+                          )
+                        )}
+                        {isBuiltin(rule.id) && (
+                          <span style={{ fontSize: '0.7rem', color: '#334155', fontStyle: 'italic' }}>built-in</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {editingId === rule.id && (
+                    <PolicyEditorRow
+                      key={`${rule.id}-editor`}
+                      draft={draft}
+                      onChangeDraft={setDraft}
+                      onSave={() => void handleSave()}
+                      onCancel={cancelEdit}
+                      saving={saving}
+                    />
+                  )}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PAGE_SIZE = 25;
 
 export default function ModelGuard() {
@@ -352,7 +724,7 @@ export default function ModelGuard() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  const [tab, setTab] = useState<'overview' | 'audit' | 'guardrails'>('overview');
+  const [tab, setTab] = useState<'overview' | 'audit' | 'guardrails' | 'configuration'>('overview');
 
   // Audit filters
   const [auditProvider, setAuditProvider] = useState('');
@@ -394,10 +766,34 @@ export default function ModelGuard() {
     }
   }, [auditProvider, auditRisk, auditPage]);
 
+  // Configuration tab state
+  const [policies, setPolicies]         = useState<PolicyRule[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
+  const [mgConfig, setMgConfig]         = useState<GuardrailConfig | null>(null);
+
+  const loadConfigTab = useCallback(async () => {
+    setPoliciesLoading(true);
+    try {
+      const [polRes, cfgRes] = await Promise.all([
+        api.listPolicies(),
+        api.configModelGuard(),
+      ]);
+      setPolicies(polRes.policies ?? []);
+      setMgConfig(cfgRes);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Failed to load configuration', 'error');
+    } finally {
+      setPoliciesLoading(false);
+    }
+  }, [addToast]);
+
   useEffect(() => { void loadAll(); }, [loadAll]);
   useEffect(() => {
     if (tab === 'audit') void loadAudit();
   }, [tab, loadAudit]);
+  useEffect(() => {
+    if (tab === 'configuration') void loadConfigTab();
+  }, [tab, loadConfigTab]);
 
   useInterval(loadAll, 30000);
 
@@ -409,6 +805,78 @@ export default function ModelGuard() {
         addToast('Guardrail configuration saved', 'success');
       } catch (e) {
         addToast(e instanceof Error ? e.message : 'Save failed', 'error');
+      }
+    },
+    [addToast],
+  );
+
+  const handleMgConfigSave = useCallback(
+    async (cfg: GuardrailConfig) => {
+      try {
+        await api.updateModelGuardConfig(cfg);
+        setMgConfig(cfg);
+        addToast('ModelGuard configuration saved', 'success');
+      } catch (e) {
+        addToast(e instanceof Error ? e.message : 'Save failed', 'error');
+      }
+    },
+    [addToast],
+  );
+
+  const handlePolicyToggle = useCallback(
+    async (rule: PolicyRule) => {
+      try {
+        await api.updatePolicy(rule.id, { ...rule, enabled: !rule.enabled });
+        setPolicies((prev) => prev.map((p) => p.id === rule.id ? { ...p, enabled: !p.enabled } : p));
+        addToast(`Policy ${rule.id} ${!rule.enabled ? 'enabled' : 'disabled'}`, 'success');
+      } catch (e) {
+        addToast(e instanceof Error ? e.message : 'Update failed', 'error');
+      }
+    },
+    [addToast],
+  );
+
+  const handlePolicySave = useCallback(
+    async (draft: PolicyDraft, original: PolicyRule | null) => {
+      const rule: PolicyRuleInput = {
+        description: draft.description,
+        action: draft.action,
+        policy_ref: draft.policy_ref,
+        enabled: draft.enabled,
+        conditions: draft.conditions.split('\n').map((s) => s.trim()).filter(Boolean),
+      };
+      try {
+        if (original) {
+          await api.updatePolicy(original.id, rule);
+          setPolicies((prev) =>
+            prev.map((p) =>
+              p.id === original.id
+                ? { ...p, ...rule, id: p.id, conditions: rule.conditions ?? [] }
+                : p,
+            ),
+          );
+          addToast('Policy updated', 'success');
+        } else {
+          const res = await api.createPolicy(rule);
+          addToast(`Policy ${res.id} created`, 'success');
+          void loadConfigTab();
+        }
+      } catch (e) {
+        addToast(e instanceof Error ? e.message : 'Save failed', 'error');
+        throw e; // re-throw so PolicyEditorRow knows it failed
+      }
+    },
+    [addToast, loadConfigTab],
+  );
+
+  const handlePolicyDelete = useCallback(
+    async (id: string) => {
+      try {
+        await api.deletePolicy(id);
+        setPolicies((prev) => prev.filter((p) => p.id !== id));
+        addToast(`Policy ${id} deleted`, 'success');
+      } catch (e) {
+        addToast(e instanceof Error ? e.message : 'Delete failed', 'error');
       }
     },
     [addToast],
@@ -479,7 +947,7 @@ export default function ModelGuard() {
 
       {/* ─── Tabs ─────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '2rem', borderBottom: '1px solid #334155', paddingBottom: '0' }}>
-        {(['overview', 'audit', 'guardrails'] as const).map((t) => (
+        {(['overview', 'audit', 'guardrails', 'configuration'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -491,7 +959,10 @@ export default function ModelGuard() {
               borderBottom: tab === t ? '2px solid #3b82f6' : '2px solid transparent',
             }}
           >
-            {t === 'overview' ? 'Overview' : t === 'audit' ? 'Model Call Audit' : 'Guardrails'}
+            {t === 'overview' ? 'Overview'
+              : t === 'audit' ? 'Model Call Audit'
+              : t === 'guardrails' ? 'Guardrails'
+              : 'Configuration'}
           </button>
         ))}
       </div>
@@ -684,6 +1155,35 @@ export default function ModelGuard() {
       {tab === 'guardrails' && !guardrails && !loading && (
         <div className="card empty-state">
           Could not load guardrail configuration.
+        </div>
+      )}
+
+      {/* ─── Tab: Configuration ───────────────────────────────────────────────── */}
+      {tab === 'configuration' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* ModelGuard Config */}
+          <div>
+            <p className="section-title" style={{ marginBottom: '0.75rem' }}>ModelGuard Runtime Config</p>
+            {mgConfig ? (
+              <GuardrailsPanel config={mgConfig} onSave={handleMgConfigSave} />
+            ) : policiesLoading ? (
+              <div className="card loading-skeleton" style={{ height: '12rem' }} />
+            ) : (
+              <div className="card empty-state">Could not load ModelGuard configuration.</div>
+            )}
+          </div>
+
+          {/* Baseline Policies */}
+          <div>
+            <p className="section-title" style={{ marginBottom: '0.75rem' }}>Baseline Policies</p>
+            <PoliciesPanel
+              policies={policies}
+              loading={policiesLoading}
+              onToggle={handlePolicyToggle}
+              onSave={handlePolicySave}
+              onDelete={handlePolicyDelete}
+            />
+          </div>
         </div>
       )}
     </div>

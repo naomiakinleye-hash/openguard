@@ -81,6 +81,11 @@ func buildConfig() common.Config {
 	cfg.TwitterBearerToken = os.Getenv("TWITTER_BEARER_TOKEN")
 	cfg.TwitterWebhookSecret = os.Getenv("TWITTER_WEBHOOK_SECRET")
 
+	// Tunnel config — set COMMSGUARD_TUNNEL_MODE to "ngrok" or "cloudflared" to
+	// expose the local webhook server to the internet automatically.
+	cfg.TunnelMode = os.Getenv("COMMSGUARD_TUNNEL_MODE")
+	cfg.NgrokAuthToken = os.Getenv("NGROK_AUTHTOKEN")
+
 	contentAnalysis := os.Getenv("COMMSGUARD_ENABLE_CONTENT_ANALYSIS")
 	if strings.EqualFold(contentAnalysis, "false") {
 		cfg.EnableContentAnalysis = false

@@ -61,6 +61,213 @@ const CHANNELS_LIST = [
   { id: 'twitter',      name: 'Twitter / X',  icon: '🐦', fields: ['webhook_secret', 'bearer_token', 'webhook_url'] },
 ];
 
+// ─── TunnelSetupCard ──────────────────────────────────────────────────────────
+
+const WEBHOOK_PATHS: { id: string; label: string; path: string }[] = [
+  { id: 'whatsapp',     label: 'WhatsApp',     path: '/whatsapp/webhook' },
+  { id: 'telegram',     label: 'Telegram',     path: '/telegram/webhook' },
+  { id: 'messenger',    label: 'Messenger',    path: '/messenger/webhook' },
+  { id: 'twilio_sms',   label: 'Twilio SMS',   path: '/twilio/sms' },
+  { id: 'twilio_voice', label: 'Twilio Voice', path: '/twilio/voice' },
+  { id: 'twitter',      label: 'Twitter/X',    path: '/twitter/webhook' },
+];
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  }
+  return (
+    <button
+      onClick={copy}
+      title="Copy"
+      style={{
+        padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #334155',
+        background: copied ? '#14532d' : '#1e293b', color: copied ? '#4ade80' : '#64748b',
+        cursor: 'pointer', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0,
+        transition: 'all 0.15s',
+      }}
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  );
+}
+
+function CodeLine({ code }: { code: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
+      <code style={{ flex: 1, fontSize: '0.8125rem', color: '#a3e635', fontFamily: 'monospace', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+        {code}
+      </code>
+      <CopyButton text={code} />
+    </div>
+  );
+}
+
+function TunnelSetupCard() {
+  const [activeMode, setActiveMode] = useState<'ngrok' | 'cloudflared'>('ngrok');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [webhookPort, setWebhookPort] = useState('8090');
+
+  const displayUrl = baseUrl.trimEnd().replace(/\/$/, '') || `<public-url>`;
+
+  const ngrokCmd    = `COMMSGUARD_TUNNEL_MODE=ngrok COMMSGUARD_LISTEN_ADDR=:${webhookPort} ./commsguard-agent`;
+  const ngrokCfgCmd = `ngrok config add-authtoken <YOUR_NGROK_TOKEN>`;
+  const cfCmd       = `COMMSGUARD_TUNNEL_MODE=cloudflared COMMSGUARD_LISTEN_ADDR=:${webhookPort} ./commsguard-agent`;
+
+
+  const inputStyle: React.CSSProperties = {
+    background: '#0f172a', border: '1px solid #334155', borderRadius: '6px',
+    padding: '0.375rem 0.625rem', color: '#f1f5f9', fontSize: '0.8125rem',
+    outline: 'none',
+  };
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div className="section-title" style={{ marginBottom: '0.25rem' }}>🔗 Tunnel Setup — Local Hosting</div>
+          <p style={{ fontSize: '0.75rem', color: '#64748b' }}>
+            Expose the webhook server (:<span style={{ color: '#94a3b8' }}>{webhookPort}</span>) to the internet so external platforms can reach it.
+            The tunnel URL is printed to the agent log at startup.
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+          <label style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Webhook Port</label>
+          <input
+            type="number" min={1024} max={65535}
+            value={webhookPort}
+            onChange={e => setWebhookPort(e.target.value)}
+            style={{ ...inputStyle, width: '5.5rem' }}
+          />
+        </div>
+      </div>
+
+      {/* Mode tabs */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #334155' }}>
+        {(['ngrok', 'cloudflared'] as const).map(mode => (
+          <button
+            key={mode}
+            onClick={() => setActiveMode(mode)}
+            style={{
+              padding: '0.625rem 1.25rem', background: 'none', border: 'none',
+              borderBottom: `2px solid ${activeMode === mode ? '#3b82f6' : 'transparent'}`,
+              color: activeMode === mode ? '#60a5fa' : '#64748b',
+              fontWeight: 600, fontSize: '0.8125rem', cursor: 'pointer',
+              marginBottom: '-1px',
+            }}
+          >
+            {mode === 'ngrok' ? '🟠 ngrok' : '🟡 cloudflared'}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {activeMode === 'ngrok' && (
+          <>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+              <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.375rem 0.75rem', fontSize: '0.75rem', color: '#94a3b8', flexShrink: 0 }}>1</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.8125rem', color: '#f1f5f9', fontWeight: 600, marginBottom: '0.375rem' }}>
+                  Create a free account &amp; authenticate
+                </p>
+                <p style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                  Sign up at <code style={{ color: '#60a5fa' }}>dashboard.ngrok.com</code>, copy your auth token, then run:
+                </p>
+                <CodeLine code={ngrokCfgCmd} />
+                <p style={{ fontSize: '0.7rem', color: '#475569', marginTop: '0.375rem' }}>
+                  Or pass <code style={{ color: '#a3e635' }}>NGROK_AUTHTOKEN=&lt;token&gt;</code> inline (see step 2).
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+              <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.375rem 0.75rem', fontSize: '0.75rem', color: '#94a3b8', flexShrink: 0 }}>2</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.8125rem', color: '#f1f5f9', fontWeight: 600, marginBottom: '0.375rem' }}>
+                  Start commsguard-agent with tunnel mode
+                </p>
+                <CodeLine code={ngrokCmd} />
+                <p style={{ fontSize: '0.7rem', color: '#475569', marginTop: '0.375rem' }}>
+                  The agent will start ngrok, wait for the public URL, and print it to the log with all webhook paths.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeMode === 'cloudflared' && (
+          <>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+              <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.375rem 0.75rem', fontSize: '0.75rem', color: '#94a3b8', flexShrink: 0 }}>1</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.8125rem', color: '#f1f5f9', fontWeight: 600, marginBottom: '0.375rem' }}>
+                  Install cloudflared — no account needed for quick tunnels
+                </p>
+                <CodeLine code="# macOS" />
+                <CodeLine code="brew install cloudflared" />
+                <div style={{ margin: '0.25rem 0' }} />
+                <CodeLine code="# Linux (amd64)" />
+                <CodeLine code="curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared && chmod +x cloudflared" />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+              <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.375rem 0.75rem', fontSize: '0.75rem', color: '#94a3b8', flexShrink: 0 }}>2</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.8125rem', color: '#f1f5f9', fontWeight: 600, marginBottom: '0.375rem' }}>
+                  Start commsguard-agent with tunnel mode
+                </p>
+                <CodeLine code={cfCmd} />
+                <p style={{ fontSize: '0.7rem', color: '#475569', marginTop: '0.375rem' }}>
+                  A <code style={{ color: '#a3e635' }}>*.trycloudflare.com</code> URL is generated automatically — no account or DNS change required.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Webhook URL generator */}
+        <div style={{ borderTop: '1px solid #334155', paddingTop: '1rem' }}>
+          <p style={{ fontSize: '0.8125rem', color: '#f1f5f9', fontWeight: 600, marginBottom: '0.625rem' }}>
+            3 · Register webhook URLs in each platform's developer console
+          </p>
+          <p style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.75rem' }}>
+            Paste your tunnel public URL below to generate the exact webhook paths:
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <label style={{ fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>Public base URL</label>
+            <input
+              type="url"
+              placeholder="https://abc123.ngrok-free.app"
+              value={baseUrl}
+              onChange={e => setBaseUrl(e.target.value)}
+              style={{ ...inputStyle, flex: 1 }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            {WEBHOOK_PATHS.map(({ id, label, path }) => (
+              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                <span style={{ width: '6.5rem', fontSize: '0.75rem', color: '#94a3b8', flexShrink: 0 }}>{label}</span>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '5px', padding: '0.3rem 0.625rem' }}>
+                  <code style={{ flex: 1, fontSize: '0.75rem', color: '#a3e635', fontFamily: 'monospace', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                    {displayUrl}{path}
+                  </code>
+                  <CopyButton text={displayUrl !== '<public-url>' ? `${displayUrl}${path}` : `${path}`} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value, color }: { label: string; value: number | string; color?: string }) {
@@ -1103,6 +1310,9 @@ export default function CommsGuard() {
               </div>
             </>
           )}
+
+          {/* Tunnel Setup — always visible in config tab */}
+          <TunnelSetupCard />
         </div>
       )}
 

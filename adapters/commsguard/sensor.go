@@ -6,12 +6,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	common "github.com/DiniMuhd7/openguard/adapters/commsguard/common"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/messenger"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/telegram"
+	"github.com/DiniMuhd7/openguard/adapters/commsguard/tunnel"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/twilio"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/twitter"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/whatsapp"
@@ -35,6 +37,7 @@ type CommsGuardSensor struct {
 	server *http.Server
 	wg     sync.WaitGroup
 
+	tun      *tunnel.Tunnel // non-nil when a tunnel is active
 	mu       sync.Mutex
 	running  bool
 	cancelFn context.CancelFunc
@@ -142,6 +145,20 @@ func (s *CommsGuardSensor) Start(ctx context.Context) error {
 		}
 	}()
 
+	// Start tunnel if configured — wait briefly for the HTTP server to bind first.
+	if mode := tunnel.Mode(strings.ToLower(s.cfg.TunnelMode)); mode != tunnel.ModeNone {
+		time.Sleep(150 * time.Millisecond)
+		tun, err := tunnel.Start(innerCtx, mode, s.cfg.ListenAddr, s.cfg.NgrokAuthToken, s.logger)
+		if err != nil {
+			s.logger.Error("commsguard: tunnel failed to start — running without tunnel",
+				zap.String("mode", s.cfg.TunnelMode),
+				zap.Error(err),
+			)
+		} else {
+			s.tun = tun
+		}
+	}
+
 	s.running = true
 	return nil
 }
@@ -173,6 +190,10 @@ func (s *CommsGuardSensor) Stop() error {
 
 	s.wg.Wait()
 	s.publisher.Close()
+	if s.tun != nil {
+		s.tun.Stop()
+		s.tun = nil
+	}
 	s.running = false
 	return nil
 }

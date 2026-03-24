@@ -44,6 +44,20 @@ type Config struct {
 	BulkMessageThreshold  int           // default: 20
 	BulkMessageWindow     time.Duration // default: 60s
 	EnableContentAnalysis bool          // default: true (set false for privacy-first mode)
+
+	// Tunnel config — set TunnelMode to "ngrok" or "cloudflared" to automatically
+	// expose the local webhook server to the internet without manual port-forwarding.
+	// Leave empty (default) to run without a tunnel (LAN / localhost only).
+	//
+	//   ngrok       — requires ngrok CLI on PATH; authenticate once with
+	//                 `ngrok config add-authtoken <token>` or pass NgrokAuthToken.
+	//                 Free accounts: https://dashboard.ngrok.com/signup
+	//
+	//   cloudflared — requires cloudflared CLI on PATH; no account needed for
+	//                 quick tunnels (*.trycloudflare.com).
+	//                 Download: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+	TunnelMode     string // "ngrok" | "cloudflared" | "" (disabled)
+	NgrokAuthToken string // optional ngrok auth token (overrides `ngrok config add-authtoken`)
 }
 
 // DefaultConfig returns a Config with sensible defaults applied.
