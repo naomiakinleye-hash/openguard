@@ -111,13 +111,14 @@ func (s *Server) handleHostGuardStats(w http.ResponseWriter, r *http.Request) {
 	typeCounts := map[string]int{}
 	tierCounts := map[string]int{}
 	hosts := map[string]struct{}{}
-	var threatEvents int
+	var threatEvents, totalHostEvents int
 
 	for _, ev := range allEvents {
 		domain, _ := ev["domain"].(string)
 		if domain != "host" {
 			continue
 		}
+		totalHostEvents++
 
 		// Count threat events (tier >= 2 or risk_score >= 50).
 		tier, _ := ev["tier"].(float64)
@@ -174,6 +175,7 @@ func (s *Server) handleHostGuardStats(w http.ResponseWriter, r *http.Request) {
 			{Type: "process_created", Count: 42},
 		}
 		threatEvents = 25
+		totalHostEvents = 142
 		hosts["workstation-01"] = struct{}{}
 		hosts["server-prod-02"] = struct{}{}
 		hosts["laptop-dev-03"] = struct{}{}
@@ -188,7 +190,7 @@ func (s *Server) handleHostGuardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, hostStatsResponse{
-		TotalEvents:   len(allEvents),
+		TotalEvents:   totalHostEvents,
 		ThreatEvents:  threatEvents,
 		UniqueHosts:   len(hosts),
 		ActiveRules:   activeRules,
