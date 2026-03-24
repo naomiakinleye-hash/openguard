@@ -80,6 +80,9 @@ type Server struct {
 
 	// configStore holds all runtime-mutable configuration for all domains.
 	configStore *domainConfigStore
+
+	// waSession manages the WhatsApp multi-device (QR-code) live session.
+	waSession *waSession
 }
 
 // NewServer constructs a new console API Server.
@@ -139,6 +142,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		agentGuardStore: newAgentStore(),
 		modelGuard:      newModelGuardState(),
 		configStore:     newDomainConfigStore(),
+		waSession:       newWASession(logger),
 	}
 	s.activeProvider.Store(provider)
 	return s
@@ -156,7 +160,10 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // Start registers routes and begins listening for requests.
-func (s *Server) Start(_ context.Context) error {
+func (s *Server) Start(ctx context.Context) error {
+	if s.waSession != nil {
+		go s.waSession.Start(ctx)
+	}
 	mux := http.NewServeMux()
 
 	// Login endpoint is registered directly on the mux — it is exempt from JWT auth.
@@ -182,6 +189,9 @@ func (s *Server) Start(_ context.Context) error {
 
 // Stop gracefully shuts down the HTTP server.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.waSession != nil {
+		s.waSession.Stop()
+	}
 	if s.srv != nil {
 		return s.srv.Shutdown(ctx)
 	}
@@ -208,6 +218,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/summary", s.handleSummary)
 
 	// CommsGuard-specific endpoints.
+	mux.HandleFunc("/api/v1/commsguard/whatsapp/status", s.handleWAStatus)
+	mux.HandleFunc("/api/v1/commsguard/whatsapp/qr", s.handleWAQR)
+	mux.HandleFunc("/api/v1/commsguard/whatsapp/messages", s.handleWAMessages)
+	mux.HandleFunc("/api/v1/commsguard/whatsapp/connect", s.handleWAConnect)
+	mux.HandleFunc("/api/v1/commsguard/whatsapp/logout", s.handleWALogout)
 	mux.HandleFunc("/api/v1/commsguard/stats", s.handleCommsGuardStats)
 	mux.HandleFunc("/api/v1/commsguard/events", s.handleCommsGuardEvents)
 	mux.HandleFunc("/api/v1/commsguard/channels", s.handleCommsGuardChannels)

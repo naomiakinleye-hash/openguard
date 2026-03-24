@@ -13,6 +13,9 @@ import {
   type LinkedDevice,
   type LinkedDevicesResponse,
   type Event,
+  type WAStatus,
+  type WAQRData,
+  type WAMessage,
 } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useToast } from '../contexts/ToastContext';
@@ -798,6 +801,176 @@ function LinkedDevicesPanel() {
   );
 }
 
+// ─── WhatsApp Live Session Panel ──────────────────────────────────────────────
+
+function WhatsAppSessionPanel() {
+  const [status, setStatus] = useState<WAStatus | null>(null);
+  const [qrData, setQrData] = useState<WAQRData | null>(null);
+  const [messages, setMessages] = useState<WAMessage[]>([]);
+
+  const fetchStatus = useCallback(() => {
+    api.waStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  const fetchQR = useCallback(() => {
+    api.waQR().then(setQrData).catch(() => {});
+  }, []);
+
+  const fetchMessages = useCallback(() => {
+    api.waMessages().then((r) => setMessages(r.messages)).catch(() => {});
+  }, []);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+  useInterval(fetchStatus, 5000);
+
+  useEffect(() => {
+    if (status?.state === 'qr_ready') fetchQR();
+  }, [status?.state, fetchQR]);
+  useInterval(() => { if (status?.state === 'qr_ready') fetchQR(); }, 20000);
+
+  useEffect(() => {
+    if (status?.state === 'connected') fetchMessages();
+  }, [status?.state, fetchMessages]);
+  useInterval(() => { if (status?.state === 'connected') fetchMessages(); }, 3000);
+
+  const handleConnect = () => api.waConnect().then(fetchStatus).catch(() => {});
+  const handleLogout = () =>
+    api.waLogout().then(() => { setMessages([]); fetchStatus(); }).catch(() => {});
+
+  const stateColor =
+    ({ disconnected: '#475569', connecting: '#f59e0b', qr_ready: '#3b82f6', connected: '#22c55e' } as Record<string, string>)[
+      status?.state ?? 'disconnected'
+    ] ?? '#475569';
+
+  return (
+    <div className="card" style={{ marginBottom: '1.25rem', borderLeft: `3px solid ${stateColor}` }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+          <span style={{ fontSize: '1.25rem' }}>📱</span>
+          <div>
+            <div style={{ fontWeight: 700, color: '#f1f5f9', fontSize: '0.9375rem' }}>WhatsApp Live Session</div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>QR-code companion device · multi-device protocol</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span style={{
+            fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem',
+            borderRadius: '9999px', background: '#1e293b', color: stateColor, border: `1px solid ${stateColor}`,
+          }}>
+            {(status?.state ?? 'disconnected').toUpperCase().replace('_', ' ')}
+          </span>
+          {status?.state !== 'connected' && status?.state !== 'qr_ready' && (
+            <button
+              className="btn-secondary"
+              onClick={handleConnect}
+              style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}
+            >
+              Connect
+            </button>
+          )}
+          {(status?.state === 'connected' || status?.state === 'qr_ready') && (
+            <button
+              className="btn-secondary"
+              onClick={handleLogout}
+              style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem', color: '#f87171' }}
+            >
+              Logout
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* QR code */}
+      {status?.state === 'qr_ready' && qrData?.qr_image && (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          padding: '1.5rem', background: '#fff', borderRadius: '12px',
+          marginBottom: '1rem', maxWidth: '320px', margin: '0 auto 1rem',
+        }}>
+          <img src={qrData.qr_image} alt="WhatsApp QR Code" style={{ width: 300, height: 300, display: 'block' }} />
+          <div style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#1e293b', textAlign: 'center', fontWeight: 500 }}>
+            Open WhatsApp → Linked Devices → Link a Device
+            <br />
+            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+              {qrData.expires_at ? `Expires ${new Date(qrData.expires_at).toLocaleTimeString()}` : 'Scan now'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Connected info */}
+      {status?.state === 'connected' && (
+        <div style={{
+          display: 'flex', gap: '1.5rem', padding: '0.75rem',
+          background: '#052e16', borderRadius: '8px', marginBottom: '1rem',
+          border: '1px solid #166534', flexWrap: 'wrap',
+        }}>
+          <div>
+            <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Phone</div>
+            <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 600 }}>+{status.phone}</div>
+          </div>
+          {(status.message_count ?? 0) > 0 && (
+            <div>
+              <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Messages</div>
+              <div style={{ fontSize: '0.875rem', color: '#f1f5f9', fontWeight: 600 }}>{status.message_count}</div>
+            </div>
+          )}
+          {status.connected_since && (
+            <div>
+              <div style={{ fontSize: '0.7rem', color: '#4ade80' }}>Since</div>
+              <div style={{ fontSize: '0.875rem', color: '#f1f5f9' }}>{new Date(status.connected_since).toLocaleTimeString()}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Intercepted messages */}
+      {status?.state === 'connected' && messages.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
+            Intercepted Messages
+          </div>
+          <div style={{ maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            {messages.slice(0, 50).map((msg) => (
+              <div
+                key={msg.id}
+                style={{
+                  padding: '0.5rem 0.75rem',
+                  background: msg.from_me ? '#1e3a5f' : '#0f172a',
+                  borderRadius: '6px',
+                  border: `1px solid ${msg.from_me ? '#1d4ed8' : '#1e293b'}`,
+                  borderLeft: `3px solid ${msg.from_me ? '#3b82f6' : '#475569'}`,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                  <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>
+                    {msg.from_me ? '📤 You' : `📩 +${msg.sender}`}
+                    {msg.is_group && <span style={{ marginLeft: '0.3rem', color: '#64748b' }}>· group</span>}
+                  </span>
+                  <span style={{ fontSize: '0.65rem', color: '#475569' }}>
+                    {new Date(msg.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.8125rem', color: '#e2e8f0' }}>
+                  {msg.has_media && !msg.content && '📎 [media]'}
+                  {msg.content || (msg.has_media ? '' : '[no content]')}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {status?.state === 'connected' && messages.length === 0 && (
+        <div className="empty-state">
+          Waiting for messages… Send or receive a WhatsApp message to see it here.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Events Table ─────────────────────────────────────────────────────────────
 
 function CommsEventsTable({
@@ -1212,6 +1385,11 @@ export default function CommsGuard() {
               <LinkedDevicesPanel />
             </div>
           )}
+
+          {/* WhatsApp Live Session (QR-based) */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <WhatsAppSessionPanel />
+          </div>
 
           {/* Threat Distribution + Global Config */}
           <div className="card-grid">

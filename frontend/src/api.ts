@@ -443,6 +443,38 @@ export interface LinkedDevicesResponse {
   sampled_at: string;
 }
 
+// ─── WhatsApp Live Session types (QR-based multi-device) ───────────────────
+
+export interface WAStatus {
+  state: 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
+  phone?: string;
+  name?: string;
+  connected_since?: string;
+  message_count: number;
+}
+
+export interface WAQRData {
+  state: 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
+  qr_image?: string;   // data:image/png;base64,...
+  expires_at?: string; // RFC3339
+}
+
+export interface WAMessage {
+  id: string;
+  chat: string;
+  sender: string;
+  content: string;
+  timestamp: string;
+  has_media: boolean;
+  from_me: boolean;
+  is_group: boolean;
+}
+
+export interface WAMessagesResponse {
+  messages: WAMessage[];
+  total: number;
+}
+
 // ─── HostGuard types ─────────────────────────────────────────────────────────
 
 export interface HostEventTypeStat {
@@ -678,6 +710,13 @@ export const api = {
   updateCommsChannel: (channel: CommsChannelUpdate) =>
     postJSON<{ status: string }>('/api/v1/commsguard/config', { channel }),
   commsLinkedDevices: () => get<LinkedDevicesResponse>('/api/v1/commsguard/linked-devices'),
+
+  // WhatsApp live session (QR-based connection)
+  waStatus: () => get<WAStatus>('/api/v1/commsguard/whatsapp/status'),
+  waQR: () => get<WAQRData>('/api/v1/commsguard/whatsapp/qr'),
+  waMessages: () => get<WAMessagesResponse>('/api/v1/commsguard/whatsapp/messages'),
+  waConnect: () => post<{ status: string }>('/api/v1/commsguard/whatsapp/connect'),
+  waLogout: () => post<{ status: string }>('/api/v1/commsguard/whatsapp/logout'),
 
   // ModelGuard endpoints
   modelGuardStats: () => get<ModelGuardStatsResponse>('/api/v1/modelguard/stats'),
