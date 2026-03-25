@@ -17,6 +17,7 @@ type Publisher struct {
 	topic        string
 	logger       *zap.Logger
 	localHandler func([]byte) error // non-nil in direct/in-process mode
+	modelClient  *HostModelIntelClient // optional AI enrichment; nil = disabled
 }
 
 // NewPublisher creates a new Publisher connected to the given NATS URL
@@ -39,9 +40,24 @@ func NewDirectPublisher(handler func([]byte) error, topic string, logger *zap.Lo
 	return &Publisher{localHandler: handler, topic: topic, logger: logger}
 }
 
+// WithModelIntelClient attaches an AI enrichment client to the publisher.
+// Pass nil to disable AI enrichment (default). Returns the same *Publisher for
+// chaining after New*Publisher.
+func (p *Publisher) WithModelIntelClient(client *HostModelIntelClient) *Publisher {
+	p.modelClient = client
+	return p
+}
+
 // Publish converts the HostEvent to a UnifiedEvent JSON payload and either calls
 // the local handler (direct mode) or publishes to NATS.
-func (p *Publisher) Publish(_ context.Context, event *HostEvent) error {
+// When a model client is configured, AI enrichment runs before serialisation.
+func (p *Publisher) Publish(ctx context.Context, event *HostEvent) error {
+	// Stage: AI enrichment — append novel indicators discovered by the model.
+	if p.modelClient != nil {
+		novel := p.modelClient.Enrich(ctx, event, event.Indicators)
+		event.Indicators = append(event.Indicators, novel...)
+	}
+
 	payload, err := event.ToUnifiedEvent()
 	if err != nil {
 		return fmt.Errorf("hostguard: to unified event: %w", err)

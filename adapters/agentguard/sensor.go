@@ -11,6 +11,7 @@ import (
 
 	common "github.com/DiniMuhd7/openguard/adapters/agentguard/common"
 	interceptor "github.com/DiniMuhd7/openguard/adapters/agentguard/interceptor"
+	nats "github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
 
@@ -23,6 +24,7 @@ type AgentGuardSensor struct {
 	checker     *common.PolicyComplianceChecker
 	interceptor *interceptor.AgentInterceptor
 	logger      *zap.Logger
+	modelNC     *nats.Conn // dedicated NATS conn for AI enrichment
 
 	mux    *http.ServeMux
 	server *http.Server
@@ -55,6 +57,27 @@ func NewAgentGuardSensor(cfg common.Config, logger *zap.Logger) (*AgentGuardSens
 	checker := common.NewPolicyComplianceChecker()
 	inter := interceptor.NewAgentInterceptor(registry, publisher, checker, logger)
 
+	// Wire AI enrichment when enabled.
+	var modelNC *nats.Conn
+	if cfg.ModelGatewayEnabled {
+		nc, ncErr := nats.Connect(cfg.NATSUrl,
+			nats.Name("openguard-agentguard-ai"),
+			nats.MaxReconnects(-1),
+		)
+		if ncErr != nil {
+			logger.Warn("agentguard: AI enrichment NATS connect failed — running without AI",
+				zap.Error(ncErr))
+		} else {
+			modelNC = nc
+			mc := common.NewAgentModelIntelClient(nc, cfg.ModelGatewayTopic, cfg.ModelGatewayTimeout, cfg.ModelGatewayAgentID, logger)
+			inter.WithModelIntelClient(mc)
+			logger.Info("agentguard: AI enrichment enabled",
+				zap.String("topic", cfg.ModelGatewayTopic),
+				zap.String("agent_id", cfg.ModelGatewayAgentID),
+			)
+		}
+	}
+
 	mux := http.NewServeMux()
 	inter.RegisterRoutes(mux)
 
@@ -70,6 +93,7 @@ func NewAgentGuardSensor(cfg common.Config, logger *zap.Logger) (*AgentGuardSens
 		checker:     checker,
 		interceptor: inter,
 		logger:      logger,
+		modelNC:     modelNC,
 		mux:         mux,
 		server:      server,
 	}, nil
@@ -116,6 +140,9 @@ func (s *AgentGuardSensor) Stop() error {
 
 	s.wg.Wait()
 	s.publisher.Close()
+	if s.modelNC != nil {
+		s.modelNC.Drain() //nolint:errcheck
+	}
 	s.running = false
 	return nil
 }

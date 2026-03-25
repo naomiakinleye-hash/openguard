@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	common "github.com/DiniMuhd7/openguard/adapters/agentguard/common"
 	agentguard "github.com/DiniMuhd7/openguard/adapters/agentguard"
@@ -65,6 +66,22 @@ func buildConfig() common.Config {
 	}
 	if v := os.Getenv("OPENGUARD_AGENTGUARD_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
+	}
+
+	// AI enrichment via model-gateway.
+	if v := os.Getenv("OPENGUARD_AGENTGUARD_MODEL_GATEWAY_ENABLED"); v == "true" {
+		cfg.ModelGatewayEnabled = true
+	}
+	if v := os.Getenv("OPENGUARD_AGENTGUARD_MODEL_GATEWAY_TOPIC"); v != "" {
+		cfg.ModelGatewayTopic = v
+	}
+	if v := os.Getenv("OPENGUARD_AGENTGUARD_MODEL_GATEWAY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.ModelGatewayTimeout = d
+		}
+	}
+	if v := os.Getenv("OPENGUARD_AGENTGUARD_MODEL_GATEWAY_AGENT_ID"); v != "" {
+		cfg.ModelGatewayAgentID = v
 	}
 
 	return cfg

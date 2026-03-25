@@ -6,15 +6,33 @@ package hostguard
 import (
 	common "github.com/DiniMuhd7/openguard/adapters/hostguard/common"
 	windows "github.com/DiniMuhd7/openguard/adapters/hostguard/windows"
+	nats "github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
 
 // NewSensor returns the platform-appropriate Sensor implementation.
-// On Windows, this returns a WindowsSensor.
+// On Windows, this returns a WindowsSensor with optional AI enrichment.
 func NewSensor(cfg common.Config, logger *zap.Logger) (common.Sensor, error) {
 	publisher, err := common.NewPublisher(cfg.NATSUrl, cfg.RawEventTopic, logger)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.ModelGatewayEnabled {
+		nc, ncErr := nats.Connect(cfg.NATSUrl,
+			nats.Name("openguard-hostguard-ai"),
+			nats.MaxReconnects(-1),
+		)
+		if ncErr != nil {
+			logger.Warn("hostguard: AI enrichment NATS connect failed — running without AI",
+				zap.Error(ncErr))
+		} else {
+			mc := common.NewHostModelIntelClient(nc, cfg.ModelGatewayTopic, cfg.ModelGatewayTimeout, cfg.ModelGatewayAgentID, logger)
+			publisher.WithModelIntelClient(mc)
+			logger.Info("hostguard: AI enrichment enabled",
+				zap.String("topic", cfg.ModelGatewayTopic),
+				zap.String("agent_id", cfg.ModelGatewayAgentID),
+			)
+		}
 	}
 	return windows.NewSensor(cfg, publisher, logger), nil
 }

@@ -48,6 +48,18 @@ type Config struct {
 	// container environments where the netlink monitor starts without error but
 	// delivers events non-deterministically.
 	DisableRealtimeMonitor bool
+
+	// ModelGatewayEnabled enables AI threat enrichment via the model-gateway agent.
+	ModelGatewayEnabled bool
+	// ModelGatewayTopic is the NATS subject consumed by the model-gateway.
+	// Default: "openguard.modelguard.requests".
+	ModelGatewayTopic string
+	// ModelGatewayTimeout is the per-request deadline for AI enrichment calls.
+	// Default: 10s.
+	ModelGatewayTimeout time.Duration
+	// ModelGatewayAgentID identifies HostGuard to the model-gateway rate-limiter.
+	// Default: "hostguard".
+	ModelGatewayAgentID string
 }
 
 // AnomalyThresholds defines thresholds used for anomaly detection.

@@ -51,7 +51,7 @@
     },
     "domain": {
       "type": "string",
-      "enum": ["host", "comms", "agent", "model"],
+      "enum": ["host", "comms", "agent", "model", "network"],
       "description": "Functional domain that classified this event"
     },
     "severity": {

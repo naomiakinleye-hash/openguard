@@ -100,6 +100,27 @@ func buildConfig(logger *zap.Logger) common.Config {
 		cfg.AllowlistedBinaries = splitComma(v)
 	}
 
+	// AI enrichment via model-gateway.
+	if v := os.Getenv("OPENGUARD_HOSTGUARD_MODEL_GATEWAY_ENABLED"); v == "true" {
+		cfg.ModelGatewayEnabled = true
+	}
+	cfg.ModelGatewayTopic = "openguard.modelguard.requests"
+	if v := os.Getenv("OPENGUARD_HOSTGUARD_MODEL_GATEWAY_TOPIC"); v != "" {
+		cfg.ModelGatewayTopic = v
+	}
+	cfg.ModelGatewayTimeout = 10 * time.Second
+	if v := os.Getenv("OPENGUARD_HOSTGUARD_MODEL_GATEWAY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.ModelGatewayTimeout = d
+		} else {
+			logger.Warn("hostguard-agent: invalid OPENGUARD_HOSTGUARD_MODEL_GATEWAY_TIMEOUT", zap.Error(err))
+		}
+	}
+	cfg.ModelGatewayAgentID = "hostguard"
+	if v := os.Getenv("OPENGUARD_HOSTGUARD_MODEL_GATEWAY_AGENT_ID"); v != "" {
+		cfg.ModelGatewayAgentID = v
+	}
+
 	return cfg
 }
 

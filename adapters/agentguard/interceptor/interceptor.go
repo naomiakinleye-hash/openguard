@@ -15,10 +15,11 @@ import (
 
 // AgentInterceptor handles HTTP requests for agent action interception and management.
 type AgentInterceptor struct {
-	registry  *common.AgentRegistry
-	publisher *common.Publisher
-	checker   *common.PolicyComplianceChecker
-	logger    *zap.Logger
+	registry    *common.AgentRegistry
+	publisher   *common.Publisher
+	checker     *common.PolicyComplianceChecker
+	modelClient *common.AgentModelIntelClient
+	logger      *zap.Logger
 }
 
 // NewAgentInterceptor creates a new AgentInterceptor.
@@ -34,6 +35,12 @@ func NewAgentInterceptor(
 		checker:   checker,
 		logger:    logger,
 	}
+}
+
+// WithModelIntelClient attaches an AI enrichment client to the interceptor.
+func (i *AgentInterceptor) WithModelIntelClient(client *common.AgentModelIntelClient) *AgentInterceptor {
+	i.modelClient = client
+	return i
 }
 
 // RegisterRoutes registers all AgentInterceptor routes onto the given mux.
@@ -84,6 +91,14 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 
 	result := i.checker.Check(profile, &req)
 
+	// Stage 2: AI enrichment — if violations exist, forward action context to
+	// the model-gateway for semantic threat classification. Novel indicators are
+	// merged before the violation event is emitted.
+	var aiIndicators []string
+	if i.modelClient != nil && len(result.Violations) > 0 {
+		aiIndicators = i.modelClient.Enrich(ctx, &req, profile, result.Violations)
+	}
+
 	if len(result.Violations) == 0 {
 		baseEvent.PolicyMatch = "allow"
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -96,6 +111,7 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 
 	// Emit violation-specific event.
 	violationEventType := pickViolationEventType(result.Violations)
+	allViolationIndicators := append(result.Violations, aiIndicators...)
 	violationEvent := &common.AgentEvent{
 		EventType:         violationEventType,
 		AgentID:           req.AgentID,
@@ -108,7 +124,7 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 		PolicyMatch:       "deny",
 		ConditionsMatched: result.ConditionsCount,
 		Timestamp:         time.Now(),
-		Indicators:        result.Violations,
+		Indicators:        allViolationIndicators,
 	}
 	i.publishEvent(ctx, violationEvent)
 

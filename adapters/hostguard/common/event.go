@@ -203,34 +203,34 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	for _, ind := range e.Indicators {
 		switch ind {
 		case "critical_service_stopped":
-			return "critical", 95.0, "T4"
+			return "critical", 65.0, "T3"
 		case "suspicious_kernel_module":
 			return "critical", 95.0, "T4"
 		case "hidden_driver":
 			return "critical", 95.0, "T4"
 		case "usb_mass_storage_inserted":
-			return "high", 70.0, "T3"
+			return "high", 50.0, "T2"
 		case "usb_hid_inserted":
-			return "high", 70.0, "T3"
+			return "high", 50.0, "T2"
 		case "imds_abuse":
-			return "critical", 95.0, "T4"
+			return "critical", 95.0, "immediate"
 		case "secure_boot_disabled":
-			return "high", 70.0, "T3"
+			return "high", 50.0, "T2"
 		case "firmware_setup_mode":
-			return "critical", 95.0, "T4"
+			return "critical", 95.0, "immediate"
 		case "browser_remote_debugging_enabled":
-			return "high", 70.0, "T3"
+			return "high", 50.0, "T2"
 		case "browser_security_disabled":
-			return "high", 75.0, "T3"
+			return "high", 55.0, "T2"
 		}
 	}
 	switch e.EventType {
 	case "privilege_escalation":
-		return "high", 80.0, "T4"
+		return "high", 65.0, "T3"
 	case "process_anomaly", "suspicious_path":
 		return "medium", 50.0, "T2"
 	case "startup_item_added", "startup_item_modified":
-		return "high", 70.0, "T3"
+		return "high", 50.0, "T2"
 	case "resource_spike":
 		return "medium", 40.0, "T1"
 	case "process_created", "process_terminated":
@@ -238,7 +238,7 @@ func classifyEvent(e *HostEvent) (severity string, riskScore float64, tier strin
 	case "connection_established", "connection_closed":
 		return "info", 10.0, "T0"
 	case "suspicious_connection", "high_volume_connection":
-		return "high", 70.0, "T3"
+		return "high", 50.0, "T2"
 	case "hidden_process_detected":
 		return "critical", 90.0, "T4"
 	case "suspicious_file_access":

@@ -85,6 +85,7 @@ func (s *Service) Start(ctx context.Context) error {
 				"openguard.hostguard.raw",
 				"openguard.agentguard.raw",
 				"openguard.commsguard.raw",
+				"openguard.networkguard.raw",
 			}
 			for _, topic := range topics {
 				topic := topic
