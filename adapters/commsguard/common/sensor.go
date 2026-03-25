@@ -42,9 +42,7 @@ type Config struct {
 	TwitterWebhookSecret string
 
 	// Threat analysis config.
-	BulkMessageThreshold  int           // default: 20
-	BulkMessageWindow     time.Duration // default: 60s
-	EnableContentAnalysis bool          // default: true (set false for privacy-first mode)
+	EnableContentAnalysis bool // default: true (set false for privacy-first mode)
 
 	// Model-gateway AI enrichment config.
 	// When ModelGatewayEnabled is true the ThreatAnalyzer will forward each
@@ -74,6 +72,42 @@ type Config struct {
 	//                 Download: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
 	TunnelMode     string // "ngrok" | "cloudflared" | "" (disabled)
 	NgrokAuthToken string // optional ngrok auth token (overrides `ngrok config add-authtoken`)
+
+	// Intercept and notify config.
+	//
+	// NotifyEnabled controls whether a warning is sent to the recipient via
+	// the same channel whenever a threat is detected. Default: true.
+	NotifyEnabled bool
+	// InterceptEnabled controls whether CommsGuard attempts to suppress or
+	// revoke the malicious message before the recipient reads it. Default: true.
+	// Intercept is always best-effort — when the channel does not support
+	// deletion (ErrInterceptUnsupported) the warning is still delivered.
+	InterceptEnabled bool
+	// ResponseTopic is the NATS subject the sensor subscribes to for
+	// orchestrator-driven response events (see ResponseEvent). When the
+	// response-orchestrator approves an action it publishes a ResponseEvent
+	// here and the sensor dispatches the matching Notifier.
+	// Default: "openguard.commsguard.response".
+	ResponseTopic string
+
+	// WhatsApp Business API notifier credentials.
+	// Required when using the WBA path for outbound warning messages.
+	// Leave empty to rely solely on the linked-device session (whatsmeow).
+	WhatsAppAccessToken   string // WBA long-lived access token
+	WhatsAppPhoneNumberID string // WBA phone number ID used to send messages
+
+	// Twilio notifier credentials.
+	// TwilioFromNumber is the E.164-formatted Twilio phone number used to
+	// send outbound warning SMS messages (e.g. "+14155551234").
+	// TwilioAuthToken and TwilioAccountSID are reused from the adapter fields above.
+	TwilioFromNumber string
+
+	// Messenger notifier credentials.
+	// MessengerPageAccessToken is the Facebook Page access token with the
+	// pages_messaging permission, used to send warning messages via the
+	// Messenger Send API.  MessengerAppSecret/MessengerVerifyToken are reused
+	// from the adapter fields above.
+	MessengerPageAccessToken string
 }
 
 // DefaultConfig returns a Config with sensible defaults applied.
@@ -82,12 +116,13 @@ func DefaultConfig() Config {
 		NATSUrl:               "nats://localhost:4222",
 		RawEventTopic:         "openguard.commsguard.raw",
 		ListenAddr:            ":8090",
-		BulkMessageThreshold:  20,
-		BulkMessageWindow:     60 * time.Second,
 		EnableContentAnalysis: true,
 		ModelGatewayTopic:     "openguard.modelguard.requests",
 		ModelGatewayTimeout:   10 * time.Second,
 		ModelGatewayAgentID:   "commsguard",
 		CrossChannelWindow:    24 * time.Hour,
+		NotifyEnabled:         true,
+		InterceptEnabled:      true,
+		ResponseTopic:         "openguard.commsguard.response",
 	}
 }

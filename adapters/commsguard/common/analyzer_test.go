@@ -1,12 +1,25 @@
 package commsguardcommon
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
+// stubEnricher is a test double for the Enricher interface.
+type stubEnricher struct {
+	indicators []string
+	assessment *CommsModelAssessment
+}
+
+func (s *stubEnricher) Enrich(_ context.Context, _ *CommsEvent, _ []string) ([]string, *CommsModelAssessment) {
+	return s.indicators, s.assessment
+}
+
 func newAnalyzer() *ThreatAnalyzer {
-	return NewThreatAnalyzer(20, 60*time.Second, true)
+	return NewThreatAnalyzer()
 }
 
 func makeEvent(content string) *CommsEvent {
@@ -30,96 +43,107 @@ func containsIndicator(indicators []string, target string) bool {
 	return false
 }
 
-// TestPhishingRewardScamNoURL verifies that the original failing case is now detected.
-// "Click the link to claim your reward of 1million" has no URL in the text but contains
-// both a click-action phrase ("click the link") and a reward scam phrase ("claim your reward",
-// "1million"). Both alone should result in a "phishing" indicator.
-func TestPhishingRewardScamNoURL(t *testing.T) {
+// TestNoEnricherNoContentIndicators verifies that without an AI model configured,
+// Analyze returns no content-based indicators for any message.
+func TestNoEnricherNoContentIndicators(t *testing.T) {
 	a := newAnalyzer()
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{
-			name:    "original failing message",
-			content: "Click the link to claim your reward of 1million",
-		},
-		{
-			name:    "reward scam with prize",
-			content: "Congratulations you have won our prize of 1 million dollars!",
-		},
-		{
-			name:    "lottery winner no url",
-			content: "You have been selected as our lottery winner. Collect your reward now.",
-		},
-		{
-			name:    "prize claim phrase",
-			content: "Claim your prize before it expires.",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			indicators := a.Analyze(makeEvent(tt.content))
-			if !containsIndicator(indicators, "phishing") {
-				t.Errorf("expected 'phishing' indicator for message %q, got %v", tt.content, indicators)
-			}
-		})
+	indicators := a.Analyze(makeEvent("Click here to claim your reward http://evil.xyz"))
+	if len(indicators) != 0 {
+		t.Errorf("expected no indicators without enricher, got %v", indicators)
 	}
 }
 
-// TestPhishingWithURL verifies the existing URL+keyword path still works.
-func TestPhishingWithURL(t *testing.T) {
+// TestAIPhishingDetection verifies that phishing indicators from the AI model
+// are returned by Analyze.
+func TestAIPhishingDetection(t *testing.T) {
 	a := newAnalyzer()
-	indicators := a.Analyze(makeEvent("Please click here http://evil.xyz/login to verify your account"))
+	a.enricher = &stubEnricher{
+		indicators: []string{"phishing"},
+		assessment: &CommsModelAssessment{
+			RiskLevel:         "high",
+			Confidence:        0.95,
+			Summary:           "Phishing attempt detected",
+			ProviderName:      "claude",
+			RecommendedAction: "block",
+			Indicators:        []string{"phishing"},
+		},
+	}
+	event := makeEvent("Urgent: verify your account now")
+	indicators := a.Analyze(event)
 	if !containsIndicator(indicators, "phishing") {
-		t.Errorf("expected phishing indicator for URL+keyword message, got %v", indicators)
+		t.Errorf("expected phishing indicator from AI enricher, got %v", indicators)
+	}
+	if event.RawData["ai_provider"] != "claude" {
+		t.Errorf("expected ai_provider=claude in RawData, got %v", event.RawData["ai_provider"])
 	}
 }
 
-// TestExactFailingMessage is the regression test for the reported detection miss.
-// "Click the link to claim your reward of 1million. Https://click.me"
-// — capital H in Https, prize phrase, and a non-shortener URL must all be detected.
-func TestExactFailingMessage(t *testing.T) {
+// TestAIAssessmentWrittenToRawData verifies all AI assessment fields are stored on the event.
+func TestAIAssessmentWrittenToRawData(t *testing.T) {
 	a := newAnalyzer()
-	msg := "Click the link to claim your reward of 1million. Https://click.me"
-	indicators := a.Analyze(makeEvent(msg))
-	if !containsIndicator(indicators, "phishing") {
-		t.Errorf("expected 'phishing' indicator for %q, got %v", msg, indicators)
+	a.enricher = &stubEnricher{
+		indicators: []string{"credential_harvesting"},
+		assessment: &CommsModelAssessment{
+			RiskLevel:         "high",
+			Confidence:        0.87,
+			Summary:           "Credential harvesting attempt",
+			ProviderName:      "gemini",
+			RecommendedAction: "block",
+			Indicators:        []string{"credential_harvesting"},
+		},
+	}
+	event := makeEvent("Enter your password to continue")
+	a.Analyze(event)
+	checks := map[string]interface{}{
+		"ai_risk_level":         "high",
+		"ai_provider":           "gemini",
+		"ai_recommended_action": "block",
+	}
+	for key, want := range checks {
+		if got := event.RawData[key]; got != want {
+			t.Errorf("RawData[%q] = %v, want %v", key, got, want)
+		}
 	}
 }
 
-// TestClickTheLinkWithURL verifies "click the link" now matches as a phishing keyword.
-func TestClickTheLinkWithURL(t *testing.T) {
+// TestCrossChannelCorrelation verifies cross-channel attack detection using AI indicators.
+func TestCrossChannelCorrelation(t *testing.T) {
 	a := newAnalyzer()
-	indicators := a.Analyze(makeEvent("Click the link http://malicious.tk/verify to get your prize"))
-	if !containsIndicator(indicators, "phishing") {
-		t.Errorf("expected phishing indicator for 'click the link' + URL, got %v", indicators)
+	a.enricher = &stubEnricher{
+		indicators: []string{"phishing"},
+		assessment: &CommsModelAssessment{RiskLevel: "high", Confidence: 0.9},
+	}
+	tracker := NewCrossChannelTracker(24*time.Hour, zap.NewNop())
+	a.crossChannel = tracker
+
+	// First event on whatsapp.
+	e1 := &CommsEvent{
+		Channel: "whatsapp", SenderID: "attacker-1",
+		Content: "phishing message", Timestamp: time.Now(),
+	}
+	a.Analyze(e1)
+
+	// Same sender on telegram — should trigger cross_channel_attack.
+	e2 := &CommsEvent{
+		Channel: "telegram", SenderID: "attacker-1",
+		Content: "phishing message", Timestamp: time.Now(),
+	}
+	indicators := a.Analyze(e2)
+	if !containsIndicator(indicators, "cross_channel_attack") {
+		t.Errorf("expected cross_channel_attack indicator, got %v", indicators)
 	}
 }
 
-// TestCleanMessageNotFlagged verifies benign messages are not flagged.
-func TestCleanMessageNotFlagged(t *testing.T) {
+// TestNilAssessmentNoRawDataPanic verifies Analyze handles a nil assessment gracefully.
+func TestNilAssessmentNoRawDataPanic(t *testing.T) {
 	a := newAnalyzer()
-	indicators := a.Analyze(makeEvent("Hey, are we still on for dinner tonight?"))
-	if containsIndicator(indicators, "phishing") {
-		t.Errorf("clean message incorrectly flagged as phishing")
+	a.enricher = &stubEnricher{indicators: []string{"spam"}, assessment: nil}
+	event := makeEvent("buy now!")
+	indicators := a.Analyze(event)
+	if !containsIndicator(indicators, "spam") {
+		t.Errorf("expected spam indicator even with nil assessment, got %v", indicators)
 	}
-}
-
-// TestSuspiciousLinkDetection verifies suspicious TLD links are flagged.
-func TestSuspiciousLinkDetection(t *testing.T) {
-	a := newAnalyzer()
-	indicators := a.Analyze(makeEvent("Check this out: http://free-iphone.tk/claim"))
-	if !containsIndicator(indicators, "suspicious_link") {
-		t.Errorf("expected suspicious_link indicator, got %v", indicators)
-	}
-}
-
-// TestSocialEngineeringDetection verifies social engineering is still detected.
-func TestSocialEngineeringDetection(t *testing.T) {
-	a := newAnalyzer()
-	indicators := a.Analyze(makeEvent("This is your bank calling, we need you to confirm your details"))
-	if !containsIndicator(indicators, "social_engineering") {
-		t.Errorf("expected social_engineering indicator, got %v", indicators)
+	if event.RawData != nil {
+		t.Errorf("expected nil RawData when assessment is nil, got %v", event.RawData)
 	}
 }

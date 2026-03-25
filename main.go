@@ -22,6 +22,9 @@ policyengine "github.com/DiniMuhd7/openguard/services/policy-engine"
 
 hostguard "github.com/DiniMuhd7/openguard/adapters/hostguard"
 hostguardcommon "github.com/DiniMuhd7/openguard/adapters/hostguard/common"
+
+nats "github.com/nats-io/nats.go"
+modelagent "github.com/DiniMuhd7/openguard/model-gateway/agent"
 )
 
 // incidentSinkAdapter adapts consoleapi.IncidentStore to the orchestrator.IncidentSink interface.
@@ -178,6 +181,12 @@ defer hgSensor.Stop() //nolint:errcheck
 logger.Info("hostguard sensor: running in-process", zap.String("platform", hgSensor.Platform()))
 }
 
+// Start the model-gateway agent in-process. It subscribes to the model
+// request topic over the same NATS connection used by the ingest service
+// and the console API, so no separate process or binary is required.
+stopMG := startModelGateway(ctx, natsURL, logger)
+defer stopMG()
+
 logger.Info("OpenGuard v5 running",
 zap.String("listen", listenAddr),
 zap.String("nats", natsURL),
@@ -200,6 +209,42 @@ logger.Warn("console API shutdown error", zap.Error(err))
 }
 
 logger.Info("OpenGuard v5 stopped")
+}
+
+// startModelGateway starts the model-gateway agent in-process using the given
+// NATS URL. It returns a stop function that drains the subscriptions on shutdown.
+// If no AI provider API key is set the gateway is skipped and the returned stop
+// function is a no-op; callers need not check the return value.
+func startModelGateway(ctx context.Context, natsURL string, logger *zap.Logger) func() {
+cfg := modelagent.DefaultConfig()
+cfg.OpenAIKey = os.Getenv("OPENGUARD_OPENAI_API_KEY")
+cfg.AnthropicKey = os.Getenv("OPENGUARD_ANTHROPIC_API_KEY")
+cfg.GeminiKey = os.Getenv("OPENGUARD_GEMINI_API_KEY")
+cfg.ProviderName = getEnv("OPENGUARD_PROVIDER", cfg.ProviderName)
+cfg.Strategy = getEnv("OPENGUARD_RISK_STRATEGY", cfg.Strategy)
+cfg.SigSecret = os.Getenv("OPENGUARD_MSG_HMAC_SECRET")
+cfg.ToolPolicyPath = getEnv("OPENGUARD_TOOL_POLICY_PATH", cfg.ToolPolicyPath)
+cfg.AuditPath = getEnv("OPENGUARD_AUDIT_PATH", cfg.AuditPath)
+
+natsConnURL := getEnv("OPENGUARD_NATS_URL", natsURL)
+nc, err := nats.Connect(natsConnURL)
+if err != nil {
+logger.Warn("model-gateway: failed to connect to NATS — AI enrichment disabled",
+zap.String("nats_url", natsConnURL), zap.Error(err))
+return func() {}
+}
+
+stop, err := modelagent.Run(ctx, nc, cfg, logger)
+if err != nil {
+logger.Warn("model-gateway: failed to start — AI enrichment disabled", zap.Error(err))
+nc.Close()
+return func() {}
+}
+
+return func() {
+stop()
+nc.Drain() //nolint:errcheck
+}
 }
 
 // getEnv returns the environment variable value or a fallback default.

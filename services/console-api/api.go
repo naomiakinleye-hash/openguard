@@ -155,7 +155,7 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		agentGuardStore:  newAgentStore(),
 		modelGuard:       newModelGuardState(),
 		configStore:      newDomainConfigStore(),
-		waSession:        newWASession(logger),
+		waSession:        newWASession(cfg.NATSUrl, logger),
 		modelConfigTopic: cfg.ModelConfigTopic,
 	}
 	if s.modelConfigTopic == "" {

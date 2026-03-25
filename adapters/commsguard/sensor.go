@@ -4,6 +4,7 @@ package commsguard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,6 +35,11 @@ type CommsGuardSensor struct {
 	twilio    *twilio.TwilioAdapter
 	twitter   *twitter.TwitterAdapter
 
+	// notifiers is the registry of per-channel Notifier implementations.
+	// Keyed by Notifier.Channel(). Populated during NewCommsGuardSensor when
+	// the matching channel credentials are configured.
+	notifiers map[string]common.Notifier
+
 	mux    *http.ServeMux
 	server *http.Server
 	wg     sync.WaitGroup
@@ -47,6 +53,12 @@ type CommsGuardSensor struct {
 	// intelligence client. It is separate from the publisher connection so the
 	// two can be drained independently on shutdown.
 	modelNC *nats.Conn
+
+	// responseNC is the NATS connection used to subscribe to orchestrator
+	// response events on cfg.ResponseTopic. Separate from modelNC and the
+	// publisher so all three can be drained independently.
+	responseNC  *nats.Conn
+	responseSub *nats.Subscription
 }
 
 // NewCommsGuardSensor creates a new CommsGuardSensor, connecting to NATS and
@@ -61,11 +73,8 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8090"
 	}
-	if cfg.BulkMessageThreshold <= 0 {
-		cfg.BulkMessageThreshold = 20
-	}
-	if cfg.BulkMessageWindow <= 0 {
-		cfg.BulkMessageWindow = 60 * time.Second
+	if cfg.ResponseTopic == "" {
+		cfg.ResponseTopic = "openguard.commsguard.response"
 	}
 
 	publisher, err := common.NewPublisher(cfg.NATSUrl, cfg.RawEventTopic, cfg.EnableContentAnalysis, logger)
@@ -74,7 +83,7 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 	}
 
 	// Build the ThreatAnalyzer with optional AI enrichment and cross-channel tracking.
-	analyzer := common.NewThreatAnalyzer(cfg.BulkMessageThreshold, cfg.BulkMessageWindow, cfg.EnableContentAnalysis)
+	analyzer := common.NewThreatAnalyzer()
 
 	// Always enable cross-channel correlation (zero-cost when no threats detected).
 	crossChannelTracker := common.NewCrossChannelTracker(cfg.CrossChannelWindow, logger)
@@ -110,6 +119,7 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 		analyzer:  analyzer,
 		mux:       http.NewServeMux(),
 		modelNC:   modelNC,
+		notifiers: make(map[string]common.Notifier),
 	}
 
 	// Initialise adapters whose credentials are configured, warn-and-continue on error.
@@ -117,18 +127,32 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 		s.whatsapp = whatsapp.NewWhatsAppAdapter(cfg.WhatsAppAppSecret, cfg.WhatsAppVerifyToken, publisher, analyzer, logger)
 		s.mux.Handle("/whatsapp/webhook", s.whatsapp)
 		logger.Info("commsguard: whatsapp adapter enabled")
+
+		// Register notifier when WBA send credentials are available.
+		if cfg.WhatsAppAccessToken != "" && cfg.WhatsAppPhoneNumberID != "" {
+			s.registerNotifier(whatsapp.NewWhatsAppNotifier(cfg.WhatsAppAccessToken, cfg.WhatsAppPhoneNumberID, logger))
+			logger.Info("commsguard: whatsapp notifier registered (WBA send path)")
+		}
 	}
 
 	if cfg.TelegramBotToken != "" {
 		s.telegram = telegram.NewTelegramAdapter(cfg.TelegramBotToken, cfg.TelegramWebhookSecret, publisher, analyzer, logger)
 		s.mux.Handle("/telegram/webhook", s.telegram)
 		logger.Info("commsguard: telegram adapter enabled")
+
+		s.registerNotifier(telegram.NewTelegramNotifier(cfg.TelegramBotToken, logger))
+		logger.Info("commsguard: telegram notifier registered")
 	}
 
 	if cfg.MessengerAppSecret != "" || cfg.MessengerVerifyToken != "" {
 		s.messenger = messenger.NewMessengerAdapter(cfg.MessengerAppSecret, cfg.MessengerVerifyToken, publisher, analyzer, logger)
 		s.mux.Handle("/messenger/webhook", s.messenger)
 		logger.Info("commsguard: messenger adapter enabled")
+
+		if cfg.MessengerPageAccessToken != "" {
+			s.registerNotifier(messenger.NewMessengerNotifier(cfg.MessengerPageAccessToken, logger))
+			logger.Info("commsguard: messenger notifier registered")
+		}
 	}
 
 	if cfg.TwilioAuthToken != "" || cfg.TwilioAccountSID != "" {
@@ -136,12 +160,22 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 		s.mux.HandleFunc("/twilio/sms", s.twilio.HandleSMS)
 		s.mux.HandleFunc("/twilio/voice", s.twilio.HandleVoice)
 		logger.Info("commsguard: twilio adapter enabled")
+
+		if cfg.TwilioFromNumber != "" {
+			s.registerNotifier(twilio.NewTwilioNotifier(cfg.TwilioAccountSID, cfg.TwilioAuthToken, cfg.TwilioFromNumber, logger))
+			logger.Info("commsguard: twilio notifier registered")
+		}
 	}
 
 	if cfg.TwitterWebhookSecret != "" || cfg.TwitterBearerToken != "" {
 		s.twitter = twitter.NewTwitterAdapter(cfg.TwitterWebhookSecret, cfg.TwitterBearerToken, publisher, analyzer, logger)
 		s.mux.Handle("/twitter/webhook", s.twitter)
 		logger.Info("commsguard: twitter adapter enabled")
+
+		if cfg.TwitterBearerToken != "" {
+			s.registerNotifier(twitter.NewTwitterNotifier(cfg.TwitterBearerToken, logger))
+			logger.Info("commsguard: twitter notifier registered")
+		}
 	}
 
 	s.server = &http.Server{
@@ -195,6 +229,36 @@ func (s *CommsGuardSensor) Start(ctx context.Context) error {
 	}
 
 	s.running = true
+
+	// Start orchestrator response subscriber if a NATS connection can be established.
+	if len(s.notifiers) > 0 {
+		nc, err := nats.Connect(s.cfg.NATSUrl,
+			nats.Name("openguard-commsguard-responder"),
+			nats.MaxReconnects(-1),
+		)
+		if err != nil {
+			s.logger.Warn("commsguard: response subscriber NATS connect failed — orchestrated notify disabled",
+				zap.String("nats_url", s.cfg.NATSUrl),
+				zap.Error(err),
+			)
+		} else {
+			sub, err := nc.Subscribe(s.cfg.ResponseTopic, s.handleResponseEvent)
+			if err != nil {
+				nc.Close()
+				s.logger.Warn("commsguard: response subscriber failed",
+					zap.String("topic", s.cfg.ResponseTopic),
+					zap.Error(err),
+				)
+			} else {
+				s.responseNC = nc
+				s.responseSub = sub
+				s.logger.Info("commsguard: subscribed to response topic",
+					zap.String("topic", s.cfg.ResponseTopic),
+				)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -228,6 +292,13 @@ func (s *CommsGuardSensor) Stop() error {
 	if s.modelNC != nil {
 		s.modelNC.Drain() //nolint:errcheck
 		s.modelNC = nil
+	}
+	if s.responseNC != nil {
+		if s.responseSub != nil {
+			s.responseSub.Unsubscribe() //nolint:errcheck
+		}
+		s.responseNC.Drain() //nolint:errcheck
+		s.responseNC = nil
 	}
 	if s.tun != nil {
 		s.tun.Stop()
@@ -279,4 +350,88 @@ func (s *CommsGuardSensor) adapters() []common.Sensor {
 		result = append(result, s.twitter)
 	}
 	return result
+}
+
+// registerNotifier adds a Notifier to the sensor's registry.
+func (s *CommsGuardSensor) registerNotifier(n common.Notifier) {
+	s.notifiers[n.Channel()] = n
+}
+
+// handleResponseEvent is the NATS message handler for orchestrator response
+// events published to cfg.ResponseTopic. It decodes the ResponseEvent and
+// dispatches Intercept and/or Notify via the registered channel Notifier.
+func (s *CommsGuardSensor) handleResponseEvent(msg *nats.Msg) {
+	var re common.ResponseEvent
+	if err := json.Unmarshal(msg.Data, &re); err != nil {
+		s.logger.Warn("commsguard: invalid response event payload",
+			zap.Error(err),
+			zap.ByteString("data", msg.Data),
+		)
+		return
+	}
+
+	notifier, ok := s.notifiers[re.Channel]
+	if !ok {
+		s.logger.Debug("commsguard: no notifier for channel — skipping response",
+			zap.String("channel", re.Channel),
+			zap.String("event_id", re.EventID),
+		)
+		return
+	}
+
+	// Reconstruct a minimal CommsEvent so Notifier implementations have the
+	// identifiers they need without requiring the full original event.
+	event := &common.CommsEvent{
+		Channel:     re.Channel,
+		SenderID:    re.SenderID,
+		RecipientID: re.RecipientID,
+		MessageID:   re.MessageID,
+	}
+
+	notifyMsg := re.NotifyMessage
+	if notifyMsg == "" {
+		notifyMsg = common.DefaultNotifyMessage
+	}
+
+	ctx := context.Background()
+
+	// Intercept first (best-effort), then always notify.
+	if re.Action == "intercept" || re.Action == "intercept_and_notify" {
+		if !s.cfg.InterceptEnabled {
+			s.logger.Debug("commsguard: intercept disabled by config",
+				zap.String("event_id", re.EventID),
+			)
+		} else if err := notifier.Intercept(ctx, event); err != nil {
+			// ErrInterceptUnsupported is expected for certain channels; log at
+			// Debug. Other errors are transient failures; log at Warn.
+			if err == common.ErrInterceptUnsupported {
+				s.logger.Debug("commsguard: intercept not supported on channel",
+					zap.String("channel", re.Channel),
+					zap.String("event_id", re.EventID),
+				)
+			} else {
+				s.logger.Warn("commsguard: intercept failed — proceeding to notify",
+					zap.String("channel", re.Channel),
+					zap.String("event_id", re.EventID),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	if re.Action == "notify" || re.Action == "intercept_and_notify" {
+		if !s.cfg.NotifyEnabled {
+			s.logger.Debug("commsguard: notify disabled by config",
+				zap.String("event_id", re.EventID),
+			)
+			return
+		}
+		if err := notifier.Notify(ctx, event, notifyMsg); err != nil {
+			s.logger.Error("commsguard: notify failed",
+				zap.String("channel", re.Channel),
+				zap.String("event_id", re.EventID),
+				zap.Error(err),
+			)
+		}
+	}
 }

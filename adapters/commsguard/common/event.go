@@ -106,6 +106,41 @@ func (e *CommsEvent) toUnifiedEventInternal(includeContent bool) ([]byte, error)
 	return payload, nil
 }
 
+// PromoteEventType updates an event type string based on the indicators returned
+// by threat analysis.  The most severe indicator wins; the original type is
+// returned unchanged when no indicator maps to a named event type.
+func PromoteEventType(current string, indicators []string) string {
+	best := current
+	priority := 0
+	for _, ind := range indicators {
+		var (candidate string; p int)
+		switch ind {
+		case "credential_harvesting":
+			candidate, p = "credential_harvesting_detected", 100
+		case "data_exfiltration":
+			candidate, p = "data_exfiltration_detected", 100
+		case "malware_attachment":
+			candidate, p = "malware_attachment_detected", 100
+		case "account_takeover", "account_takeover_attempt":
+			candidate, p = "account_takeover_attempt", 90
+		case "phishing":
+			candidate, p = "phishing_detected", 80
+		case "social_engineering":
+			candidate, p = "social_engineering_detected", 75
+		case "bulk_message":
+			candidate, p = "bulk_message_detected", 70
+		case "suspicious_link":
+			candidate, p = "suspicious_link_detected", 60
+		case "spam":
+			candidate, p = "spam_detected", 30
+		}
+		if p > priority {
+			best, priority = candidate, p
+		}
+	}
+	return best
+}
+
 // classifyEvent assigns severity, risk_score, and tier based on event type and indicators.
 func classifyEvent(e *CommsEvent) (severity string, riskScore float64, tier string) {
 	// Indicator special-cases take priority over event type.
@@ -117,8 +152,16 @@ func classifyEvent(e *CommsEvent) (severity string, riskScore float64, tier stri
 			return "critical", 95.0, "immediate"
 		case "malware_attachment":
 			return "critical", 95.0, "immediate"
-		case "account_takeover":
+		case "account_takeover", "account_takeover_attempt":
 			return "critical", 88.0, "immediate"
+		case "phishing":
+			return "high", 75.0, "T2"
+		case "social_engineering":
+			return "high", 70.0, "T2"
+		case "suspicious_link":
+			return "medium", 50.0, "T2"
+		case "spam":
+			return "low", 20.0, "T1"
 		}
 	}
 	switch e.EventType {

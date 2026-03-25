@@ -131,13 +131,13 @@ func recommendedCommsAction(riskLevel string) string {
 
 // Enrich sends the CommsEvent to the model-gateway for AI threat classification
 // and returns any NEW indicators discovered by the model that are not already
-// present in heuristicIndicators, plus the full assessment for Layer 0
+// present in knownIndicators, plus the full assessment for Layer 0
 // constitutional evaluation.
 //
 // Errors are handled gracefully: on timeout / unavailability the method returns
-// nil so the caller falls back to heuristic-only results. This keeps CommsGuard
+// nil so callers continue with only the rate-based indicators. This keeps CommsGuard
 // functional when the model-gateway is not deployed.
-func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuristicIndicators []string) ([]string, *CommsModelAssessment) {
+func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, knownIndicators []string) ([]string, *CommsModelAssessment) {
 	if m == nil || m.nc == nil {
 		return nil, nil
 	}
@@ -150,10 +150,10 @@ func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuris
 	req := modelIntelRequest{
 		EventID:    eventID,
 		AgentID:    m.agentID,
-		Prompt:     buildIntelPrompt(event, heuristicIndicators),
-		RiskLevel:  inferRequestRiskLevel(heuristicIndicators),
+		Prompt:     buildIntelPrompt(event, knownIndicators),
+		RiskLevel:  inferRequestRiskLevel(event, knownIndicators),
 		Domain:     "comms",
-		Indicators: heuristicIndicators,
+		Indicators: knownIndicators,
 	}
 
 	data, err := json.Marshal(req)
@@ -194,7 +194,7 @@ func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuris
 		return nil, nil
 	}
 
-	novel := extractNovelIndicators(resp.Result.Summary, heuristicIndicators)
+	novel := extractNovelIndicators(resp.Result.Summary, knownIndicators)
 	assessment := &CommsModelAssessment{
 		RiskLevel:         resp.Result.RiskLevel,
 		Confidence:        resp.Result.Confidence,
@@ -243,7 +243,7 @@ func buildIntelPrompt(event *CommsEvent, existing []string) string {
 	}
 
 	if len(existing) > 0 {
-		sb.WriteString("\n\nHeuristic indicators already detected: ")
+		sb.WriteString("\n\nBehavioral indicators already detected: ")
 		sb.WriteString(strings.Join(existing, ", "))
 	}
 
@@ -259,23 +259,28 @@ func buildIntelPrompt(event *CommsEvent, existing []string) string {
 	return sb.String()
 }
 
-// inferRequestRiskLevel maps the heuristic indicator set to the model-gateway's
-// risk_level field, which drives routing strategy (single / fallback / quorum).
-func inferRequestRiskLevel(indicators []string) string {
+// inferRequestRiskLevel maps the event and known behavioral indicators to the
+// model-gateway risk_level field, which drives provider routing strategy
+// (single / primary+fallback / quorum).
+//
+// Because the AI is now the primary detector, every content-bearing message is
+// routed at minimum as "medium" so it receives primary+fallback provider coverage.
+func inferRequestRiskLevel(event *CommsEvent, indicators []string) string {
 	for _, ind := range indicators {
 		switch ind {
 		case "credential_harvesting", "data_exfiltration", "malware_attachment", "account_takeover_attempt":
 			return "high"
 		}
 	}
-	switch len(indicators) {
-	case 0:
-		return "low"
-	case 1:
-		return "medium"
-	default:
+	if len(indicators) >= 2 {
 		return "high"
 	}
+	// Default to medium for any event with content so the AI always runs with
+	// primary+fallback coverage rather than the cheapest single-provider path.
+	if event != nil && event.Content != "" {
+		return "medium"
+	}
+	return "low"
 }
 
 // extractNovelIndicators parses the AI summary JSON and returns only valid

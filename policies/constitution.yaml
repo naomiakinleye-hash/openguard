@@ -24,7 +24,8 @@ ai_provider:
   role: pre-assessment
   evaluation_order: 0           # always first — before all principles and policies
   enforcement_level: hard       # the assessment MUST complete (or fail-safe) before evaluation continues
-  on_provider_failure: block    # treat provider unavailability as C-007 (fail-safe-on-uncertainty)
+  on_provider_failure: allow    # when model-gateway is unavailable, degrade gracefully to Layer 1
+                                # change to "block" in production to enforce strict AI-first evaluation
   capabilities:
     - detect                    # identify novel threats beyond heuristic rules
     - assess                    # assign semantic risk level and confidence score

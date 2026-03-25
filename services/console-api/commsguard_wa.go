@@ -19,19 +19,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
 	commsguardcommon "github.com/DiniMuhd7/openguard/adapters/commsguard/common"
+	nats "github.com/nats-io/nats.go"
 	"go.mau.fi/whatsmeow"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // ─── State types ─────────────────────────────────────────────────────────────
@@ -118,13 +123,30 @@ type waSession struct {
 	// qrDoneCh is closed by the QR goroutine to signal completion.
 	qrDoneCh chan struct{}
 
-	// analyzer performs heuristic threat analysis on intercepted message content.
+	// analyzer performs AI-driven threat analysis on intercepted message content.
 	analyzer *commsguardcommon.ThreatAnalyzer
+
+	// natsURL is the NATS server URL used to create the event publisher.
+	natsURL string
+	// publisher publishes CommsEvents to the ingest pipeline via NATS.
+	publisher *commsguardcommon.Publisher
+
+	// modelNC is a dedicated NATS connection for the model-gateway AI enricher.
+	// Separate from the publisher connection so it can be drained independently.
+	modelNC *nats.Conn
+
+	// model-gateway configuration (populated from env vars in newWASession).
+	modelGatewayTopic   string
+	modelGatewayTimeout time.Duration
+	modelGatewayAgentID string
 }
 
 // newWASession opens the session database and returns a waSession.
+// natsURL is used to create a NATS publisher for the ingest pipeline; pass
+// an empty string to disable publishing (detection still runs but events are
+// not forwarded to the orchestrator).
 // Returns nil if the database cannot be opened (non-fatal: warn and continue).
-func newWASession(logger *zap.Logger) *waSession {
+func newWASession(natsURL string, logger *zap.Logger) *waSession {
 	// _pragma=foreign_keys(1) is applied per-connection by modernc.org/sqlite.
 	// SetMaxOpenConns(1) ensures a single SQLite connection (WAL not needed for WA).
 	db, err := sql.Open("sqlite", "file:"+waDBFile+"?_pragma=foreign_keys(1)")
@@ -140,13 +162,33 @@ func newWASession(logger *zap.Logger) *waSession {
 		logger.Warn("whatsapp: session db upgrade failed", zap.Error(err))
 		return nil
 	}
+	// Read model-gateway config from env — same vars used by commsguard-agent.
+	mgTopic := os.Getenv("COMMSGUARD_MODEL_GATEWAY_TOPIC")
+	if mgTopic == "" {
+		mgTopic = "openguard.modelguard.requests"
+	}
+	mgTimeout := 10 * time.Second
+	if v := os.Getenv("COMMSGUARD_MODEL_GATEWAY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			mgTimeout = d
+		}
+	}
+	mgAgentID := os.Getenv("COMMSGUARD_MODEL_GATEWAY_AGENT_ID")
+	if mgAgentID == "" {
+		mgAgentID = "commsguard-wa"
+	}
+
 	return &waSession{
-		state:     WAStateDisconnected,
-		container: container,
-		db:        db,
-		logger:    logger,
-		qrDoneCh:  make(chan struct{}),
-		analyzer:  commsguardcommon.NewThreatAnalyzer(0, 0, true),
+		state:               WAStateDisconnected,
+		container:           container,
+		db:                  db,
+		logger:              logger,
+		qrDoneCh:            make(chan struct{}),
+		analyzer:            commsguardcommon.NewThreatAnalyzer(),
+		natsURL:             natsURL,
+		modelGatewayTopic:   mgTopic,
+		modelGatewayTimeout: mgTimeout,
+		modelGatewayAgentID: mgAgentID,
 	}
 }
 
@@ -154,6 +196,47 @@ func newWASession(logger *zap.Logger) *waSession {
 // reconnects automatically; otherwise it waits for the user to click Connect.
 func (ws *waSession) Start(ctx context.Context) {
 	ws.ctx, ws.cancel = context.WithCancel(ctx)
+
+	// ── Wire NATS publisher for the ingest pipeline ───────────────────────────
+	// Events are published to openguard.commsguard.raw so they flow through
+	// ingest → detect → response-orchestrator just like webhook-based channels.
+	if ws.natsURL != "" {
+		pub, err := commsguardcommon.NewPublisher(ws.natsURL, "openguard.commsguard.raw", true, ws.logger)
+		if err != nil {
+			ws.logger.Warn("whatsapp: NATS publisher unavailable — events will not be forwarded to ingest pipeline",
+				zap.String("nats_url", ws.natsURL), zap.Error(err))
+		} else {
+			ws.publisher = pub
+			ws.logger.Info("whatsapp: NATS publisher connected", zap.String("topic", "openguard.commsguard.raw"))
+		}
+	}
+
+	// ── Wire model-gateway AI enricher ───────────────────────────────────────
+	// Connect a dedicated NATS connection and attach a ModelIntelClient so the
+	// linked session benefits from the same AI threat classification as the
+	// webhook-based CommsGuard adapters.
+	if ws.natsURL != "" {
+		nc, err := nats.Connect(ws.natsURL,
+			nats.Name("openguard-commsguard-wa-intel"),
+			nats.MaxReconnects(-1),
+		)
+		if err != nil {
+			ws.logger.Warn("whatsapp: model-gateway NATS connect failed — AI enrichment disabled",
+				zap.String("nats_url", ws.natsURL),
+				zap.Error(err),
+			)
+		} else {
+			ws.modelNC = nc
+			modelClient := commsguardcommon.NewModelIntelClient(
+				nc, ws.modelGatewayTopic, ws.modelGatewayTimeout, ws.modelGatewayAgentID, ws.logger,
+			)
+			ws.analyzer.WithModelIntelClient(modelClient)
+			ws.logger.Info("whatsapp: model-gateway AI enrichment enabled",
+				zap.String("topic", ws.modelGatewayTopic),
+				zap.Duration("timeout", ws.modelGatewayTimeout),
+			)
+		}
+	}
 
 	deviceStore, err := ws.container.GetFirstDevice(ctx)
 	if err != nil || deviceStore.ID == nil {
@@ -176,6 +259,14 @@ func (ws *waSession) Stop() {
 		ws.client.Disconnect()
 	}
 	ws.mu.Unlock()
+	if ws.publisher != nil {
+		ws.publisher.Close()
+		ws.publisher = nil
+	}
+	if ws.modelNC != nil {
+		_ = ws.modelNC.Drain()
+		ws.modelNC = nil
+	}
 	if ws.db != nil {
 		_ = ws.db.Close()
 	}
@@ -354,7 +445,8 @@ func (ws *waSession) handleEvent(evt interface{}) {
 }
 
 // interceptMessage converts a whatsmeow Message event into a WAMessage and
-// appends it to the ring buffer.
+// appends it to the ring buffer, publishes it to the ingest pipeline via NATS,
+// and runs threat analysis so flagged messages can be acted upon.
 func (ws *waSession) interceptMessage(v *events.Message) {
 	// Skip historical messages delivered on reconnect (older than 60s).
 	if time.Since(v.Info.Timestamp) > 60*time.Second {
@@ -379,20 +471,57 @@ func (ws *waSession) interceptMessage(v *events.Message) {
 		v.Message.GetDocumentMessage() != nil ||
 		v.Message.GetStickerMessage() != nil
 
+	// RecipientID is the JID of the chat (individual or group).
+	recipientID := v.Info.Chat.String()
+
+	// Build the event for threat analysis and NATS publishing.
+	evt := &commsguardcommon.CommsEvent{
+		EventType:   "message_received",
+		Channel:     "whatsapp",
+		Timestamp:   v.Info.Timestamp,
+		SenderID:    v.Info.Sender.User,
+		RecipientID: recipientID,
+		MessageID:   string(v.Info.ID),
+		Content:     body,
+		RawData:     make(map[string]interface{}),
+	}
+
 	// Run threat analysis on the message content.
 	var threats []string
 	if ws.analyzer != nil && body != "" {
-		evt := &commsguardcommon.CommsEvent{
-			Channel:   "whatsapp",
-			SenderID:  v.Info.Sender.User,
-			MessageID: string(v.Info.ID),
-			Content:   body,
-			Timestamp: v.Info.Timestamp,
-		}
 		threats = ws.analyzer.Analyze(evt)
 	}
 	if threats == nil {
 		threats = []string{}
+	}
+
+	// Promote event type based on detected indicators so classifyEvent() assigns
+	// the correct risk_score and tier when the event is published to NATS.
+	if len(threats) > 0 {
+		evt.Indicators = threats
+		evt.EventType = commsguardcommon.PromoteEventType(evt.EventType, threats)
+	}
+
+	// Publish to the ingest pipeline so the orchestrator can respond.
+	if ws.publisher != nil {
+		if err := ws.publisher.Publish(context.Background(), evt); err != nil {
+			ws.logger.Warn("whatsapp: failed to publish event to ingest pipeline",
+				zap.String("message_id", evt.MessageID),
+				zap.Error(err),
+			)
+		} else if len(threats) > 0 {
+			ws.logger.Info("whatsapp: threat detected — event published",
+				zap.String("message_id", evt.MessageID),
+				zap.String("sender", evt.SenderID),
+				zap.String("event_type", evt.EventType),
+				zap.Strings("indicators", threats),
+			)
+		}
+	}
+
+	// Actively intercept: revoke the flagged message and warn the chat.
+	if len(threats) > 0 {
+		go ws.actOnThreats(v, threats)
 	}
 
 	msg := WAMessage{
@@ -408,6 +537,63 @@ func (ws *waSession) interceptMessage(v *events.Message) {
 		Threats:   threats,
 	}
 	ws.appendMessage(msg)
+}
+
+// actOnThreats performs the active response for a detected threat:
+//  1. Attempts to revoke the malicious message (succeeds for messages sent from
+//     this account; best-effort/no-op for messages sent by other contacts).
+//  2. Sends a plain-language warning to the same chat so the recipient is alerted
+//     regardless of whether the original message could be deleted.
+//
+// Called in a goroutine from interceptMessage so it does not block event handling.
+func (ws *waSession) actOnThreats(v *events.Message, threats []string) {
+	ws.mu.RLock()
+	client := ws.client
+	ws.mu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	chat := v.Info.Chat
+	msgID := types.MessageID(v.Info.ID)
+
+	// Step 1 — Revoke the malicious message (best-effort).
+	if _, err := client.RevokeMessage(ctx, chat, msgID); err != nil {
+		ws.logger.Warn("whatsapp: message revoke failed (best-effort)",
+			zap.String("message_id", string(msgID)),
+			zap.String("chat", chat.String()),
+			zap.Error(err),
+		)
+	} else {
+		ws.logger.Info("whatsapp: malicious message revoked",
+			zap.String("message_id", string(msgID)),
+			zap.String("chat", chat.String()),
+		)
+	}
+
+	// Step 2 — Send a warning to the chat.
+	summary := strings.Join(threats, ", ")
+	warningText := fmt.Sprintf(
+		"⚠️ OpenGuard blocked a malicious message from %s. Detected threat(s): %s. Please do not interact with it.",
+		v.Info.Sender.User, summary,
+	)
+	warningMsg := &waE2E.Message{
+		Conversation: proto.String(warningText),
+	}
+	if _, err := client.SendMessage(ctx, chat, warningMsg); err != nil {
+		ws.logger.Warn("whatsapp: warning message send failed",
+			zap.String("chat", chat.String()),
+			zap.Error(err),
+		)
+	} else {
+		ws.logger.Info("whatsapp: warning message sent to chat",
+			zap.String("chat", chat.String()),
+			zap.Strings("threats", threats),
+		)
+	}
 }
 
 func (ws *waSession) appendMessage(msg WAMessage) {

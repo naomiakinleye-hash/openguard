@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -98,36 +99,76 @@ func (p *CodexProvider) HealthCheck(ctx context.Context) error {
 }
 
 // Analyze performs event analysis using the OpenAI Chat Completions API.
+//
+// The RawPayload is used verbatim as the prompt so that callers that have
+// already constructed a fully-formed, schema-constrained instruction (e.g.
+// buildIntelPrompt in the commsguard ModelIntelClient) are not overridden by a
+// generic wrapper. The raw model response is always preserved in Summary so
+// that downstream extractors (e.g. extractNovelIndicators) can parse it.
 func (p *CodexProvider) Analyze(ctx context.Context, eventCtx mg.EventContext) (*mg.AnalysisResult, error) {
-	prompt := fmt.Sprintf(
-		"You are a security analyst. Analyze the following security event and return a JSON object with fields: summary (string), confidence (float 0-1), risk_level (low|medium|high|critical), details (object).\n\nEvent:\n%s\n\nIndicators: %v",
-		eventCtx.RawPayload, eventCtx.Indicators,
-	)
-	raw, err := p.chatCompletion(ctx, prompt)
+	raw, err := p.chatCompletion(ctx, eventCtx.RawPayload)
 	if err != nil {
 		return nil, fmt.Errorf("codex: analyze: %w", err)
 	}
-	var result struct {
-		Summary    string            `json:"summary"`
-		Confidence float64           `json:"confidence"`
-		RiskLevel  string            `json:"risk_level"`
-		Details    map[string]string `json:"details"`
+
+	// Strip optional markdown fences that some models add (```json ... ```).
+	cleaned := raw
+	if idx := strings.Index(cleaned, "```"); idx >= 0 {
+		cleaned = cleaned[idx:]
+		cleaned = strings.TrimPrefix(cleaned, "```json")
+		cleaned = strings.TrimPrefix(cleaned, "```")
+		if end := strings.Index(cleaned, "```"); end >= 0 {
+			cleaned = cleaned[:end]
+		}
 	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		p.logger.Warn("codex: analyze: failed to parse JSON response", zap.String("raw", raw), zap.Error(err))
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Try the generic structured format: {summary, confidence, risk_level}.
+	var generic struct {
+		Summary    string  `json:"summary"`
+		Confidence float64 `json:"confidence"`
+		RiskLevel  string  `json:"risk_level"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &generic); err == nil && generic.Summary != "" {
+		return &mg.AnalysisResult{
+			ProviderName: p.ProviderName(),
+			Summary:      raw, // raw preserved for downstream callers
+			Confidence:   generic.Confidence,
+			RiskLevel:    mg.RiskLevel(generic.RiskLevel),
+		}, nil
+	}
+
+	// Try the comms-specific format: {indicators, confidence, rationale}.
+	// Detect presence of the "indicators" field (even if the array is empty / confidence is 0.0).
+	// The raw response goes into Summary so extractNovelIndicators can parse it.
+	var comms struct {
+		Indicators json.RawMessage `json:"indicators"`
+		Confidence float64         `json:"confidence"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &comms); err == nil && comms.Indicators != nil {
+		rl := mg.RiskLevel("medium")
+		switch {
+		case comms.Confidence >= 0.8:
+			rl = mg.RiskHigh
+		case comms.Confidence < 0.4:
+			rl = mg.RiskLow
+		}
 		return &mg.AnalysisResult{
 			ProviderName: p.ProviderName(),
 			Summary:      raw,
-			Confidence:   0.5,
-			RiskLevel:    mg.RiskMedium,
+			Confidence:   comms.Confidence,
+			RiskLevel:    rl,
 		}, nil
 	}
+
+	// Fallback: return raw in Summary for downstream callers to interpret.
+	p.logger.Warn("codex: analyze: could not parse structured response; returning raw",
+		zap.String("raw", raw))
 	return &mg.AnalysisResult{
 		ProviderName: p.ProviderName(),
-		Summary:      result.Summary,
-		Confidence:   result.Confidence,
-		RiskLevel:    mg.RiskLevel(result.RiskLevel),
-		Details:      result.Details,
+		Summary:      raw,
+		Confidence:   0.5,
+		RiskLevel:    mg.RiskMedium,
 	}, nil
 }
 

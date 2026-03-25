@@ -93,9 +93,6 @@ func buildConfig() common.Config {
 		cfg.EnableContentAnalysis = true
 	}
 
-	cfg.BulkMessageThreshold = 20
-	cfg.BulkMessageWindow = 60 * time.Second
-
 	// ── Model-gateway AI enrichment ──────────────────────────────────────────
 	// COMMSGUARD_MODEL_GATEWAY_ENABLED=true enables semantic AI analysis of
 	// messages via the model-gateway agent (must be running and reachable on NATS).

@@ -152,16 +152,23 @@ func (e *Engine) Evaluate(_ context.Context, event map[string]interface{}, propo
 	// ── Layer 0: AI provider pre-assessment ──────────────────────────────────
 	// The AI assessment is attached to every decision for auditability (C-004).
 	// When the constitution requires AI assessment (enforcement_level=hard) and
-	// none is available, C-007 fail-safe kicks in immediately.
+	// none is available, behaviour depends on on_provider_failure:
+	//   "block"  → C-007 fail-safe deny (maximum safety, requires model-gateway).
+	//   "allow"  → gracefully fall through to Layer 1 constitutional principles
+	//              (graceful degradation when model-gateway is not deployed).
 	if e.constitution.AIProvider.EnforcementLevel == "hard" && ai == nil {
-		e.logger.Warn("policy engine: AI assessment required but absent — fail-safe deny (C-007)")
-		return PolicyDecision{
-			Decision:                DecisionDeny,
-			PolicyCitations:         []string{"C-007", "ai_provider"},
-			Rationale:               "AI model provider assessment is required by constitution (Layer 0) but was not provided; fail-safe deny (C-007)",
-			ConstitutionalViolation: true,
-			AIAssessment:            nil,
+		if e.constitution.AIProvider.OnProviderFailure == "block" {
+			e.logger.Warn("policy engine: AI assessment required but absent — fail-safe deny (C-007)")
+			return PolicyDecision{
+				Decision:                DecisionDeny,
+				PolicyCitations:         []string{"C-007", "ai_provider"},
+				Rationale:               "AI model provider assessment is required by constitution (Layer 0) but was not provided; fail-safe deny (C-007)",
+				ConstitutionalViolation: true,
+				AIAssessment:            nil,
+			}
 		}
+		// on_provider_failure != "block": degrade gracefully to Layer 1.
+		e.logger.Debug("policy engine: AI assessment absent — falling through to Layer 1 (on_provider_failure=allow)")
 	}
 	// When the AI assessment recommends blocking, honour it immediately so the
 	// model's threat detection can raise the effective risk before heuristic
