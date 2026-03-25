@@ -46,6 +46,21 @@ type Config struct {
 	BulkMessageWindow     time.Duration // default: 60s
 	EnableContentAnalysis bool          // default: true (set false for privacy-first mode)
 
+	// Model-gateway AI enrichment config.
+	// When ModelGatewayEnabled is true the ThreatAnalyzer will forward each
+	// message to the model-gateway agent (via NATS request-reply) after
+	// completing its heuristic pass, and merge any additional indicators
+	// returned by the model into the event's indicator list.
+	ModelGatewayEnabled bool          // default: false (opt-in)
+	ModelGatewayTopic   string        // default: "openguard.modelguard.requests"
+	ModelGatewayTimeout time.Duration // default: 10s — per-request deadline
+	ModelGatewayAgentID string        // default: "commsguard"
+
+	// CrossChannelWindow is the look-back period used by the cross-channel
+	// correlation tracker to detect the same threat appearing across multiple
+	// communication channels.  Default: 24 h.
+	CrossChannelWindow time.Duration
+
 	// Tunnel config — set TunnelMode to "ngrok" or "cloudflared" to automatically
 	// expose the local webhook server to the internet without manual port-forwarding.
 	// Leave empty (default) to run without a tunnel (LAN / localhost only).
@@ -70,5 +85,9 @@ func DefaultConfig() Config {
 		BulkMessageThreshold:  20,
 		BulkMessageWindow:     60 * time.Second,
 		EnableContentAnalysis: true,
+		ModelGatewayTopic:     "openguard.modelguard.requests",
+		ModelGatewayTimeout:   10 * time.Second,
+		ModelGatewayAgentID:   "commsguard",
+		CrossChannelWindow:    24 * time.Hour,
 	}
 }

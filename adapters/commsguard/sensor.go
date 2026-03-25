@@ -17,6 +17,7 @@ import (
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/twilio"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/twitter"
 	"github.com/DiniMuhd7/openguard/adapters/commsguard/whatsapp"
+	nats "github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +42,11 @@ type CommsGuardSensor struct {
 	mu       sync.Mutex
 	running  bool
 	cancelFn context.CancelFunc
+
+	// modelNC is the NATS connection used exclusively by the model-gateway
+	// intelligence client. It is separate from the publisher connection so the
+	// two can be drained independently on shutdown.
+	modelNC *nats.Conn
 }
 
 // NewCommsGuardSensor creates a new CommsGuardSensor, connecting to NATS and
@@ -67,7 +73,35 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 		return nil, fmt.Errorf("commsguard: create publisher: %w", err)
 	}
 
+	// Build the ThreatAnalyzer with optional AI enrichment and cross-channel tracking.
 	analyzer := common.NewThreatAnalyzer(cfg.BulkMessageThreshold, cfg.BulkMessageWindow, cfg.EnableContentAnalysis)
+
+	// Always enable cross-channel correlation (zero-cost when no threats detected).
+	crossChannelTracker := common.NewCrossChannelTracker(cfg.CrossChannelWindow, logger)
+	analyzer.WithCrossChannelTracker(crossChannelTracker)
+
+	// Conditionally connect to model-gateway for AI enrichment.
+	var modelNC *nats.Conn
+	if cfg.ModelGatewayEnabled {
+		nc, err := nats.Connect(cfg.NATSUrl,
+			nats.Name("openguard-commsguard-intel"),
+			nats.MaxReconnects(-1),
+		)
+		if err != nil {
+			logger.Warn("commsguard: model-gateway NATS connect failed — AI enrichment disabled",
+				zap.String("nats_url", cfg.NATSUrl),
+				zap.Error(err),
+			)
+		} else {
+			modelNC = nc
+			modelClient := common.NewModelIntelClient(nc, cfg.ModelGatewayTopic, cfg.ModelGatewayTimeout, cfg.ModelGatewayAgentID, logger)
+			analyzer.WithModelIntelClient(modelClient)
+			logger.Info("commsguard: model-gateway AI enrichment enabled",
+				zap.String("topic", cfg.ModelGatewayTopic),
+				zap.Duration("timeout", cfg.ModelGatewayTimeout),
+			)
+		}
+	}
 
 	s := &CommsGuardSensor{
 		cfg:       cfg,
@@ -75,6 +109,7 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 		logger:    logger,
 		analyzer:  analyzer,
 		mux:       http.NewServeMux(),
+		modelNC:   modelNC,
 	}
 
 	// Initialise adapters whose credentials are configured, warn-and-continue on error.
@@ -190,6 +225,10 @@ func (s *CommsGuardSensor) Stop() error {
 
 	s.wg.Wait()
 	s.publisher.Close()
+	if s.modelNC != nil {
+		s.modelNC.Drain() //nolint:errcheck
+		s.modelNC = nil
+	}
 	if s.tun != nil {
 		s.tun.Stop()
 		s.tun = nil

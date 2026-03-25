@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	common "github.com/DiniMuhd7/openguard/adapters/commsguard/common"
 	commsguard "github.com/DiniMuhd7/openguard/adapters/commsguard"
+	common "github.com/DiniMuhd7/openguard/adapters/commsguard/common"
 	"go.uber.org/zap"
 )
 
@@ -95,6 +95,33 @@ func buildConfig() common.Config {
 
 	cfg.BulkMessageThreshold = 20
 	cfg.BulkMessageWindow = 60 * time.Second
+
+	// ── Model-gateway AI enrichment ──────────────────────────────────────────
+	// COMMSGUARD_MODEL_GATEWAY_ENABLED=true enables semantic AI analysis of
+	// messages via the model-gateway agent (must be running and reachable on NATS).
+	if strings.EqualFold(os.Getenv("COMMSGUARD_MODEL_GATEWAY_ENABLED"), "true") {
+		cfg.ModelGatewayEnabled = true
+	}
+	if v := os.Getenv("COMMSGUARD_MODEL_GATEWAY_TOPIC"); v != "" {
+		cfg.ModelGatewayTopic = v
+	}
+	if v := os.Getenv("COMMSGUARD_MODEL_GATEWAY_AGENT_ID"); v != "" {
+		cfg.ModelGatewayAgentID = v
+	}
+	if v := os.Getenv("COMMSGUARD_MODEL_GATEWAY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.ModelGatewayTimeout = d
+		}
+	}
+
+	// ── Cross-channel correlation window ─────────────────────────────────────
+	// COMMSGUARD_CROSS_CHANNEL_WINDOW sets the look-back period for detecting
+	// the same attacker across multiple channels (default: 24h).
+	if v := os.Getenv("COMMSGUARD_CROSS_CHANNEL_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.CrossChannelWindow = d
+		}
+	}
 
 	return cfg
 }

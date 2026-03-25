@@ -2,6 +2,7 @@
 package commsguardcommon
 
 import (
+	"context"
 	"encoding/base64"
 	"regexp"
 	"strings"
@@ -121,12 +122,19 @@ type senderRecord struct {
 }
 
 // ThreatAnalyzer performs heuristic threat analysis on CommsEvent messages.
+// Optionally it can be wired with a ModelIntelClient for AI-powered enrichment
+// and a CrossChannelTracker for coordinated multi-channel campaign detection.
 type ThreatAnalyzer struct {
-	mu                   sync.Mutex
-	senderHistory        map[string]*senderRecord
-	bulkThreshold        int
-	bulkWindow           time.Duration
+	mu                    sync.Mutex
+	senderHistory         map[string]*senderRecord
+	bulkThreshold         int
+	bulkWindow            time.Duration
 	enableContentAnalysis bool
+
+	// Optional AI enrichment — nil when model-gateway is not configured.
+	modelClient *ModelIntelClient
+	// Optional cross-channel correlation tracker.
+	crossChannel *CrossChannelTracker
 }
 
 // NewThreatAnalyzer creates a new ThreatAnalyzer with the given configuration.
@@ -138,14 +146,36 @@ func NewThreatAnalyzer(bulkThreshold int, bulkWindow time.Duration, enableConten
 		bulkWindow = 60 * time.Second
 	}
 	return &ThreatAnalyzer{
-		senderHistory:        make(map[string]*senderRecord),
-		bulkThreshold:        bulkThreshold,
-		bulkWindow:           bulkWindow,
+		senderHistory:         make(map[string]*senderRecord),
+		bulkThreshold:         bulkThreshold,
+		bulkWindow:            bulkWindow,
 		enableContentAnalysis: enableContentAnalysis,
 	}
 }
 
+// WithModelIntelClient attaches an AI enrichment client to the analyzer.
+// Pass nil to disable AI enrichment (default). The method returns the same
+// *ThreatAnalyzer so it can be chained after NewThreatAnalyzer.
+func (a *ThreatAnalyzer) WithModelIntelClient(client *ModelIntelClient) *ThreatAnalyzer {
+	a.modelClient = client
+	return a
+}
+
+// WithCrossChannelTracker attaches a cross-channel correlation tracker to the
+// analyzer.  Pass nil to disable cross-channel detection (default).
+func (a *ThreatAnalyzer) WithCrossChannelTracker(tracker *CrossChannelTracker) *ThreatAnalyzer {
+	a.crossChannel = tracker
+	return a
+}
+
 // Analyze inspects a CommsEvent and returns a slice of matched indicator strings.
+//
+// The analysis runs in three stages:
+//  1. Heuristic checks — keyword patterns, bulk/spam counters, link analysis.
+//  2. Cross-channel correlation — detects the same threat appearing on multiple
+//     channels within the configured look-back window.
+//  3. AI enrichment — forwards the event to the model-gateway (when configured)
+//     for semantic analysis; any novel indicators returned are merged in.
 func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 	var indicators []string
 
@@ -195,6 +225,22 @@ func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 	// Check for spam (repeated identical or near-identical content).
 	spamIndicators := a.checkSpam(event)
 	indicators = append(indicators, spamIndicators...)
+
+	// ── Stage 2: Cross-channel correlation ──────────────────────────────────
+	// Record this event in the tracker; if the same sender+threat type has
+	// already been observed on a different channel, flag it immediately.
+	if a.crossChannel != nil && len(indicators) > 0 {
+		if a.crossChannel.Track(event, indicators) {
+			indicators = append(indicators, "cross_channel_attack")
+		}
+	}
+
+	// ── Stage 3: AI enrichment via model-gateway ─────────────────────────────
+	// Best-effort: on timeout or unavailability the heuristic results are kept.
+	if a.modelClient != nil {
+		novel := a.modelClient.Enrich(context.Background(), event, indicators)
+		indicators = append(indicators, novel...)
+	}
 
 	return indicators
 }

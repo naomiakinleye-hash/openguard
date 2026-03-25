@@ -209,8 +209,15 @@ func main() {
 	)
 
 	// ── Subscribe to model requests ──────────────────────────────────────────
+	// Support NATS request-reply: when a caller sets msg.Reply (e.g. via
+	// nc.RequestWithContext), route the result back to that inbox so multiple
+	// concurrent callers each receive their own response.
 	sub, err := nc.Subscribe(modelTopic, func(msg *nats.Msg) {
-		handleMessage(msg, nc, resultTopic, pipeline, toolChecker, router, auditLedger, strategy, sigSecret, limiter, logger)
+		replyTo := resultTopic
+		if msg.Reply != "" {
+			replyTo = msg.Reply
+		}
+		handleMessage(msg, nc, replyTo, pipeline, toolChecker, router, auditLedger, strategy, sigSecret, limiter, logger)
 	})
 	if err != nil {
 		logger.Fatal("model-gateway-agent: failed to subscribe", zap.String("topic", modelTopic), zap.Error(err))
