@@ -103,16 +103,43 @@ func NewModelIntelClient(nc *nats.Conn, topic string, timeout time.Duration, age
 	}
 }
 
+// CommsModelAssessment contains the full AI provider response for a CommsGuard event.
+// It is embedded into the unified event's metadata so the orchestrator can build
+// a policyengine.AIAssessment for Layer 0 constitutional evaluation without an
+// additional model call.
+type CommsModelAssessment struct {
+	RiskLevel         string
+	Confidence        float64
+	Summary           string
+	ProviderName      string
+	RecommendedAction string
+	Indicators        []string
+}
+
+// recommendedCommsAction derives the constitutional recommended action from the
+// model's risk level output.
+func recommendedCommsAction(riskLevel string) string {
+	switch strings.ToLower(riskLevel) {
+	case "critical", "high":
+		return "block"
+	case "medium":
+		return "escalate"
+	default:
+		return "allow"
+	}
+}
+
 // Enrich sends the CommsEvent to the model-gateway for AI threat classification
 // and returns any NEW indicators discovered by the model that are not already
-// present in heuristicIndicators.
+// present in heuristicIndicators, plus the full assessment for Layer 0
+// constitutional evaluation.
 //
 // Errors are handled gracefully: on timeout / unavailability the method returns
 // nil so the caller falls back to heuristic-only results. This keeps CommsGuard
 // functional when the model-gateway is not deployed.
-func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuristicIndicators []string) []string {
+func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuristicIndicators []string) ([]string, *CommsModelAssessment) {
 	if m == nil || m.nc == nil {
-		return nil
+		return nil, nil
 	}
 
 	eventID := event.MessageID
@@ -132,7 +159,7 @@ func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuris
 	data, err := json.Marshal(req)
 	if err != nil {
 		m.logger.Warn("model-intel: failed to marshal request", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, m.timeout)
@@ -148,26 +175,34 @@ func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuris
 			zap.String("event_id", eventID),
 			zap.Error(err),
 		)
-		return nil
+		return nil, nil
 	}
 
 	var resp modelIntelResponse
 	if err := json.Unmarshal(replyMsg.Data, &resp); err != nil {
 		m.logger.Warn("model-intel: failed to parse model-gateway response", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 	if resp.Error != "" {
 		m.logger.Debug("model-intel: model-gateway returned error",
 			zap.String("event_id", eventID),
 			zap.String("error", resp.Error),
 		)
-		return nil
+		return nil, nil
 	}
 	if resp.Result == nil {
-		return nil
+		return nil, nil
 	}
 
 	novel := extractNovelIndicators(resp.Result.Summary, heuristicIndicators)
+	assessment := &CommsModelAssessment{
+		RiskLevel:         resp.Result.RiskLevel,
+		Confidence:        resp.Result.Confidence,
+		Summary:           resp.Result.Summary,
+		ProviderName:      resp.Result.ProviderName,
+		RecommendedAction: recommendedCommsAction(resp.Result.RiskLevel),
+		Indicators:        novel,
+	}
 	if len(novel) > 0 {
 		m.logger.Info("model-intel: AI enrichment added indicators",
 			zap.String("channel", event.Channel),
@@ -177,7 +212,7 @@ func (m *ModelIntelClient) Enrich(ctx context.Context, event *CommsEvent, heuris
 			zap.Strings("novel_indicators", novel),
 		)
 	}
-	return novel
+	return novel, assessment
 }
 
 // buildIntelPrompt constructs a structured prompt instructing the model to return

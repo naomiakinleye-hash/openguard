@@ -1,11 +1,51 @@
 # OpenGuard v5 Constitutional Policy
-# These 10 principles are ALWAYS evaluated first, before any baseline policy.
+# Evaluation order:
+#   1. AI Model Provider (model-gateway) — detect, assess, and enrich every event
+#      with semantic threat analysis BEFORE any principle or policy is applied.
+#   2. Constitutional principles below (C-001 … C-010) — always evaluated after
+#      the AI assessment, before any baseline or domain policy.
 # Hard-enforcement rules cannot be overridden at runtime.
 
-version: "1.0"
-last_modified: "2025-01-01T00:00:00Z"
+version: "1.1"
+last_modified: "2026-03-25T00:00:00Z"
 immutable: true
 
+# ─── Hierarchy Layer 0: AI Model Provider ─────────────────────────────────────
+# The active AI model provider (routed through the model-gateway) is the FIRST
+# control layer contacted for every security event, regardless of domain.
+# Its semantic assessment — risk level, confidence score, and novel indicators —
+# is attached to the event before any constitutional principle or policy rule is
+# evaluated.  The provider acts as an intelligent pre-filter: it can raise the
+# effective risk tier of an event, surface hidden indicators that heuristics
+# miss, and recommend a policy action.  Constitutional principles and baseline
+# policies are still enforced unconditionally; the AI assessment feeds them with
+# richer context rather than replacing them.
+ai_provider:
+  role: pre-assessment
+  evaluation_order: 0           # always first — before all principles and policies
+  enforcement_level: hard       # the assessment MUST complete (or fail-safe) before evaluation continues
+  on_provider_failure: block    # treat provider unavailability as C-007 (fail-safe-on-uncertainty)
+  capabilities:
+    - detect                    # identify novel threats beyond heuristic rules
+    - assess                    # assign semantic risk level and confidence score
+    - analyze                   # enrich event with context, indicators, and blast-radius estimate
+    - recommend                 # propose policy action (block / escalate / allow) for human review
+  output_fields:
+    - ai_risk_level             # critical | high | medium | low
+    - ai_confidence             # 0.0 – 1.0
+    - ai_indicators             # list of novel threat indicators
+    - ai_summary                # human-readable threat narrative
+    - ai_recommended_action     # block | escalate | allow
+  constraints:
+    - The AI provider MUST NOT modify constitutional principles (C-008).
+    - The AI assessment is advisory for soft-enforcement principles; it is
+      binding evidence for hard-enforcement principles.
+    - All AI assessments are recorded in the tamper-evident audit ledger (C-004).
+    - The active provider is configured via Model Settings and hot-swapped
+      through NATS without a service restart.
+
+# ─── Hierarchy Layer 1: Constitutional Principles ─────────────────────────────
+# Evaluated after the AI assessment, before any baseline or domain policy.
 principles:
   - id: C-001
     name: safety-over-autonomy
@@ -61,6 +101,7 @@ principles:
     description: >
       When the system cannot determine with sufficient confidence whether an
       action is safe, it defaults to blocking and requesting human review.
+      A failed or timed-out AI assessment is treated as maximum uncertainty.
     enforcement_level: hard
     violation_action: block
 
@@ -85,5 +126,7 @@ principles:
     description: >
       All Tier 2 and above decisions must include: evidence summary, confidence
       score, policy citations, blast-radius estimate, and rollback plan.
+      The AI provider's assessment satisfies the evidence-summary requirement.
     enforcement_level: hard
     violation_action: block
+

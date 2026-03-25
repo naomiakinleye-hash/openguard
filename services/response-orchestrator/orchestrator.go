@@ -95,8 +95,11 @@ func (o *Orchestrator) Dispatch(ctx context.Context, event map[string]interface{
 		proposedAction = selectAction(event)
 	}
 
-	// Policy evaluation (always deterministic — no model calls).
-	decision := o.policyEngine.Evaluate(ctx, event, proposedAction)
+	// Extract the Layer 0 AI assessment the originating guard embedded in the
+	// event's metadata. Passing it to Evaluate activates the constitutional
+	// AI-first hierarchy; events without AI metadata fall through normally.
+	ai := aiAssessmentFromEvent(event)
+	decision := o.policyEngine.Evaluate(ctx, event, proposedAction, ai)
 
 	// Audit the policy decision.
 	entry := auditled.AuditEntry{
@@ -322,6 +325,46 @@ func (o *Orchestrator) executeEmergencyLockdown(ctx context.Context, eventID str
 		o.logger.Warn("orchestrator: audit append failed", zap.Error(err))
 	}
 	o.sendAlert(eventID, "ciso")
+}
+
+// aiAssessmentFromEvent extracts the Layer 0 AI provider assessment embedded in
+// the event's metadata by the originating guard. Returns nil when no AI metadata
+// is present, allowing events that bypass model-gateway to fall through normally.
+func aiAssessmentFromEvent(event map[string]interface{}) *policyengine.AIAssessment {
+	meta, ok := event["metadata"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	riskLevel, _ := meta["ai_risk_level"].(string)
+	summary, _ := meta["ai_summary"].(string)
+	provider, _ := meta["ai_provider"].(string)
+	// All three fields absent means no AI enrichment was performed.
+	if riskLevel == "" && summary == "" && provider == "" {
+		return nil
+	}
+	confidence, _ := meta["ai_confidence"].(float64)
+	action, _ := meta["ai_recommended_action"].(string)
+	var indicators []string
+	if raw, ok := meta["ai_indicators"]; ok {
+		switch v := raw.(type) {
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					indicators = append(indicators, s)
+				}
+			}
+		case []string:
+			indicators = v
+		}
+	}
+	return &policyengine.AIAssessment{
+		RiskLevel:         riskLevel,
+		Confidence:        confidence,
+		Indicators:        indicators,
+		Summary:           summary,
+		RecommendedAction: action,
+		ProviderName:      provider,
+	}
 }
 
 // selectAction derives a domain-and-tier-appropriate proposed action from the event.

@@ -43,6 +43,19 @@ func NewRouter(providers []mg.ModelProvider, cfg Config, logger *zap.Logger) *Ro
 	}
 }
 
+// recommendedActionFromRisk maps a RiskLevel to the constitutional Layer 0
+// recommended action that guards embed in unified event metadata.
+func recommendedActionFromRisk(rl mg.RiskLevel) string {
+	switch rl {
+	case mg.RiskCritical, mg.RiskHigh:
+		return "block"
+	case mg.RiskMedium:
+		return "escalate"
+	default:
+		return "allow"
+	}
+}
+
 // Route dispatches the request to the appropriate provider(s) based on risk level.
 //
 // Routing strategy:
@@ -52,25 +65,37 @@ func NewRouter(providers []mg.ModelProvider, cfg Config, logger *zap.Logger) *Ro
 func (r *Router) Route(ctx context.Context, eventCtx mg.EventContext, riskLevel mg.RiskLevel) (*mg.AnalysisResult, error) {
 	r.incrementRouted()
 
+	var (
+		result *mg.AnalysisResult
+		err    error
+	)
+
 	switch riskLevel {
 	case mg.RiskLow:
-		return r.routeSingle(ctx, eventCtx)
+		result, err = r.routeSingle(ctx, eventCtx)
 	case mg.RiskMedium:
-		return r.routeWithFallback(ctx, eventCtx)
+		result, err = r.routeWithFallback(ctx, eventCtx)
 	case mg.RiskHigh, mg.RiskCritical:
-		result, err := r.routeQuorum(ctx, eventCtx)
-		if err != nil {
-			return nil, err
+		result, err = r.routeQuorum(ctx, eventCtx)
+		if err == nil {
+			// Flag for human approval on high/critical.
+			r.logger.Info("router: high/critical risk — flagging for human approval",
+				zap.String("risk_level", string(riskLevel)),
+				zap.String("event_id", eventCtx.EventID),
+			)
 		}
-		// Flag for human approval on high/critical.
-		r.logger.Info("router: high/critical risk — flagging for human approval",
-			zap.String("risk_level", string(riskLevel)),
-			zap.String("event_id", eventCtx.EventID),
-		)
-		return result, nil
 	default:
-		return r.routeSingle(ctx, eventCtx)
+		result, err = r.routeSingle(ctx, eventCtx)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	// Populate RecommendedAction so guards can relay it to the orchestrator.
+	if result != nil {
+		result.RecommendedAction = recommendedActionFromRisk(riskLevel)
+	}
+	return result, nil
 }
 
 // routeSingle calls the primary provider and returns the result directly.

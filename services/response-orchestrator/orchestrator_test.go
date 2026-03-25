@@ -38,10 +38,18 @@ func TestOrchestrator_Dispatch_T0(t *testing.T) {
 	ctx := context.Background()
 
 	// T0 event with an allowed action should be auto-resolved (log only).
+	// Include AI metadata so Layer 0 constitutional evaluation passes.
 	event := map[string]interface{}{
 		"event_id": "e-t0",
 		"tier":     "T0",
 		"domain":   "host",
+		"metadata": map[string]interface{}{
+			"ai_risk_level":         "low",
+			"ai_confidence":         0.95,
+			"ai_summary":            "No threats detected.",
+			"ai_provider":           "test-provider",
+			"ai_recommended_action": "allow",
+		},
 	}
 	if err := orch.Dispatch(ctx, event, "read"); err != nil {
 		t.Fatalf("Dispatch T0 failed: %v", err)
@@ -54,10 +62,18 @@ func TestOrchestrator_Dispatch_RequiresApproval(t *testing.T) {
 	ctx := context.Background()
 
 	// T2 event should enter pending approval; with short timeout it escalates.
+	// Include AI metadata so Layer 0 constitutional evaluation passes.
 	event := map[string]interface{}{
 		"event_id": "e-t2",
 		"tier":     "T2",
 		"domain":   "host",
+		"metadata": map[string]interface{}{
+			"ai_risk_level":         "low",
+			"ai_confidence":         0.90,
+			"ai_summary":            "No threats detected.",
+			"ai_provider":           "test-provider",
+			"ai_recommended_action": "allow",
+		},
 	}
 	// Use a background context that we cancel quickly to avoid long waits.
 	ctx2, cancel := context.WithTimeout(ctx, 200*time.Millisecond)

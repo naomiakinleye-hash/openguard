@@ -87,6 +87,9 @@ type AnalysisResult struct {
 	Confidence float64
 	// RiskLevel is the assessed risk level.
 	RiskLevel RiskLevel
+	// RecommendedAction is the action recommended by the provider based on
+	// the assessed risk level: "block", "escalate", or "allow".
+	RecommendedAction string
 	// Details contains provider-specific analysis details.
 	Details map[string]string
 }

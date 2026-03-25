@@ -186,13 +186,27 @@ func (s *NetworkGuardSensor) processEvent(ctx context.Context, data []byte) {
 	// Stage: AI enrichment — get novel network-specific indicators.
 	var allIndicators []string
 	allIndicators = append(allIndicators, existingIndicators...)
+	var aiAssessment *common.NetworkModelAssessment
 	if s.modelClient != nil {
-		novel := s.modelClient.Enrich(ctx, event, existingIndicators)
+		novel, assessment := s.modelClient.Enrich(ctx, event, existingIndicators)
 		allIndicators = append(allIndicators, novel...)
+		aiAssessment = assessment
 	}
 
 	// Build the enriched network-domain event.
 	networkEvent := s.buildNetworkEvent(event, allIndicators)
+	// Embed the Layer 0 AI assessment in metadata so the orchestrator can
+	// perform constitutional evaluation without an additional model call.
+	if aiAssessment != nil {
+		if netMeta, ok := networkEvent["metadata"].(map[string]interface{}); ok {
+			netMeta["ai_risk_level"] = aiAssessment.RiskLevel
+			netMeta["ai_confidence"] = aiAssessment.Confidence
+			netMeta["ai_summary"] = aiAssessment.Summary
+			netMeta["ai_provider"] = aiAssessment.ProviderName
+			netMeta["ai_recommended_action"] = aiAssessment.RecommendedAction
+			netMeta["ai_indicators"] = aiAssessment.Indicators
+		}
+	}
 	payload, err := json.Marshal(networkEvent)
 	if err != nil {
 		s.logger.Warn("networkguard: marshal enriched event failed", zap.Error(err))

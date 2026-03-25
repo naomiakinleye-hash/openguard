@@ -52,10 +52,23 @@ func (p *Publisher) WithModelIntelClient(client *HostModelIntelClient) *Publishe
 // the local handler (direct mode) or publishes to NATS.
 // When a model client is configured, AI enrichment runs before serialisation.
 func (p *Publisher) Publish(ctx context.Context, event *HostEvent) error {
-	// Stage: AI enrichment — append novel indicators discovered by the model.
+	// Stage: AI enrichment — append novel indicators discovered by the model
+	// and embed the full assessment in RawData so the orchestrator's Layer 0
+	// constitutional check can act on it.
 	if p.modelClient != nil {
-		novel := p.modelClient.Enrich(ctx, event, event.Indicators)
+		novel, assessment := p.modelClient.Enrich(ctx, event, event.Indicators)
 		event.Indicators = append(event.Indicators, novel...)
+		if assessment != nil {
+			if event.RawData == nil {
+				event.RawData = make(map[string]interface{})
+			}
+			event.RawData["ai_risk_level"] = assessment.RiskLevel
+			event.RawData["ai_confidence"] = assessment.Confidence
+			event.RawData["ai_summary"] = assessment.Summary
+			event.RawData["ai_provider"] = assessment.ProviderName
+			event.RawData["ai_recommended_action"] = assessment.RecommendedAction
+			event.RawData["ai_indicators"] = assessment.Indicators
+		}
 	}
 
 	payload, err := event.ToUnifiedEvent()

@@ -48,7 +48,7 @@ event := map[string]interface{}{
 "event_id": "test-001",
 "domain":   "host",
 }
-decision := engine.Evaluate(ctx, event, "disable_logging")
+decision := engine.Evaluate(ctx, event, "disable_logging", nil)
 if decision.Decision != policyengine.DecisionDeny {
 t.Errorf("expected Deny for disable_logging, got %s", decision.Decision)
 }
@@ -66,7 +66,7 @@ event := map[string]interface{}{
 "event_id": "test-002",
 "domain":   "agent",
 }
-decision := engine.Evaluate(ctx, event, "modify_policy")
+decision := engine.Evaluate(ctx, event, "modify_policy", nil)
 if decision.Decision != policyengine.DecisionDeny {
 t.Errorf("expected Deny for modify_policy, got %s", decision.Decision)
 }
@@ -87,7 +87,7 @@ event := map[string]interface{}{
 "event_id": "test-003",
 "domain":   "host",
 }
-decision := engine.Evaluate(ctx, event, "unknown_action_xyz")
+decision := engine.Evaluate(ctx, event, "unknown_action_xyz", nil)
 if decision.Decision != policyengine.DecisionDeny {
 t.Errorf("expected Deny (fail-safe) for unknown action, got %s", decision.Decision)
 }

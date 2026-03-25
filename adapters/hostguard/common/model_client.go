@@ -117,11 +117,37 @@ func NewHostModelIntelClient(nc *nats.Conn, topic string, timeout time.Duration,
 // Enrich sends the HostEvent to the model-gateway for AI threat classification
 // and returns any NEW indicators not already present in existingIndicators.
 //
+// HostModelAssessment contains the full AI provider response for a HostGuard event.
+// It is embedded into the unified event's metadata so the orchestrator can build
+// a policyengine.AIAssessment for Layer 0 constitutional evaluation without an
+// additional model call.
+type HostModelAssessment struct {
+	RiskLevel         string
+	Confidence        float64
+	Summary           string
+	ProviderName      string
+	RecommendedAction string
+	Indicators        []string
+}
+
+// recommendedHostAction derives the constitutional recommended action from the
+// model's risk level output.
+func recommendedHostAction(riskLevel string) string {
+	switch strings.ToLower(riskLevel) {
+	case "critical", "high":
+		return "block"
+	case "medium":
+		return "escalate"
+	default:
+		return "allow"
+	}
+}
+
 // Errors are handled gracefully: on timeout or unavailability the method returns
 // nil so the caller falls back to heuristic-only results.
-func (m *HostModelIntelClient) Enrich(ctx context.Context, event *HostEvent, existingIndicators []string) []string {
+func (m *HostModelIntelClient) Enrich(ctx context.Context, event *HostEvent, existingIndicators []string) ([]string, *HostModelAssessment) {
 	if m == nil || m.nc == nil {
-		return nil
+		return nil, nil
 	}
 
 	eventID := fmt.Sprintf("hostguard-%d", time.Now().UnixNano())
@@ -138,7 +164,7 @@ func (m *HostModelIntelClient) Enrich(ctx context.Context, event *HostEvent, exi
 	data, err := json.Marshal(req)
 	if err != nil {
 		m.logger.Warn("host-model-intel: marshal request failed", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, m.timeout)
@@ -153,26 +179,34 @@ func (m *HostModelIntelClient) Enrich(ctx context.Context, event *HostEvent, exi
 			zap.String("event_id", eventID),
 			zap.Error(err),
 		)
-		return nil
+		return nil, nil
 	}
 
 	var resp hostModelIntelResponse
 	if err := json.Unmarshal(replyMsg.Data, &resp); err != nil {
 		m.logger.Warn("host-model-intel: parse response failed", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 	if resp.Error != "" {
 		m.logger.Debug("host-model-intel: model-gateway returned error",
 			zap.String("event_id", eventID),
 			zap.String("error", resp.Error),
 		)
-		return nil
+		return nil, nil
 	}
 	if resp.Result == nil {
-		return nil
+		return nil, nil
 	}
 
 	novel := extractNovelHostIndicators(resp.Result.Summary, existingIndicators)
+	assessment := &HostModelAssessment{
+		RiskLevel:         resp.Result.RiskLevel,
+		Confidence:        resp.Result.Confidence,
+		Summary:           resp.Result.Summary,
+		ProviderName:      resp.Result.ProviderName,
+		RecommendedAction: recommendedHostAction(resp.Result.RiskLevel),
+		Indicators:        novel,
+	}
 	if len(novel) > 0 {
 		m.logger.Info("host-model-intel: AI enrichment added indicators",
 			zap.String("event_type", event.EventType),
@@ -182,7 +216,7 @@ func (m *HostModelIntelClient) Enrich(ctx context.Context, event *HostEvent, exi
 			zap.Strings("novel_indicators", novel),
 		)
 	}
-	return novel
+	return novel, assessment
 }
 
 // buildHostIntelPrompt constructs a structured prompt instructing the model to

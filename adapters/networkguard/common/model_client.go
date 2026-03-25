@@ -100,14 +100,41 @@ func NewNetworkModelIntelClient(nc *nats.Conn, topic string, timeout time.Durati
 	}
 }
 
+// NetworkModelAssessment contains the full AI provider response for a NetworkGuard event.
+// It is embedded into the unified event's metadata so the orchestrator can build
+// a policyengine.AIAssessment for Layer 0 constitutional evaluation without an
+// additional model call.
+type NetworkModelAssessment struct {
+	RiskLevel         string
+	Confidence        float64
+	Summary           string
+	ProviderName      string
+	RecommendedAction string
+	Indicators        []string
+}
+
+// recommendedNetworkAction derives the constitutional recommended action from the
+// model's risk level output.
+func recommendedNetworkAction(riskLevel string) string {
+	switch strings.ToLower(riskLevel) {
+	case "critical", "high":
+		return "block"
+	case "medium":
+		return "escalate"
+	default:
+		return "allow"
+	}
+}
+
 // Enrich sends the network event context to the model-gateway for AI threat
-// classification and returns any NEW indicators not already in existingIndicators.
+// classification and returns any NEW indicators not already in existingIndicators
+// plus the full assessment for Layer 0 constitutional evaluation.
 //
 // Errors are handled gracefully: on timeout or unavailability the method returns
 // nil so the caller falls back to heuristic-only results.
-func (m *NetworkModelIntelClient) Enrich(ctx context.Context, event map[string]interface{}, existingIndicators []string) []string {
+func (m *NetworkModelIntelClient) Enrich(ctx context.Context, event map[string]interface{}, existingIndicators []string) ([]string, *NetworkModelAssessment) {
 	if m == nil || m.nc == nil {
-		return nil
+		return nil, nil
 	}
 
 	eventID, _ := event["event_id"].(string)
@@ -127,7 +154,7 @@ func (m *NetworkModelIntelClient) Enrich(ctx context.Context, event map[string]i
 	data, err := json.Marshal(req)
 	if err != nil {
 		m.logger.Warn("network-model-intel: marshal request failed", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, m.timeout)
@@ -139,19 +166,27 @@ func (m *NetworkModelIntelClient) Enrich(ctx context.Context, event map[string]i
 			zap.String("event_id", eventID),
 			zap.Error(err),
 		)
-		return nil
+		return nil, nil
 	}
 
 	var resp networkModelIntelResponse
 	if err := json.Unmarshal(replyMsg.Data, &resp); err != nil {
 		m.logger.Warn("network-model-intel: parse response failed", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 	if resp.Error != "" || resp.Result == nil {
-		return nil
+		return nil, nil
 	}
 
 	novel := extractNovelNetworkIndicators(resp.Result.Summary, existingIndicators)
+	assessment := &NetworkModelAssessment{
+		RiskLevel:         resp.Result.RiskLevel,
+		Confidence:        resp.Result.Confidence,
+		Summary:           resp.Result.Summary,
+		ProviderName:      resp.Result.ProviderName,
+		RecommendedAction: recommendedNetworkAction(resp.Result.RiskLevel),
+		Indicators:        novel,
+	}
 	if len(novel) > 0 {
 		m.logger.Info("network-model-intel: AI enrichment added indicators",
 			zap.String("event_id", eventID),
@@ -160,7 +195,7 @@ func (m *NetworkModelIntelClient) Enrich(ctx context.Context, event map[string]i
 			zap.Strings("novel_indicators", novel),
 		)
 	}
-	return novel
+	return novel, assessment
 }
 
 // buildNetworkIntelPrompt constructs a structured prompt for network threat analysis.

@@ -252,8 +252,19 @@ func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 	// ── Stage 3: AI enrichment via model-gateway ─────────────────────────────
 	// Best-effort: on timeout or unavailability the heuristic results are kept.
 	if a.modelClient != nil {
-		novel := a.modelClient.Enrich(context.Background(), event, indicators)
+		novel, assessment := a.modelClient.Enrich(context.Background(), event, indicators)
 		indicators = append(indicators, novel...)
+		if assessment != nil {
+			if event.RawData == nil {
+				event.RawData = make(map[string]interface{})
+			}
+			event.RawData["ai_risk_level"] = assessment.RiskLevel
+			event.RawData["ai_confidence"] = assessment.Confidence
+			event.RawData["ai_summary"] = assessment.Summary
+			event.RawData["ai_provider"] = assessment.ProviderName
+			event.RawData["ai_recommended_action"] = assessment.RecommendedAction
+			event.RawData["ai_indicators"] = assessment.Indicators
+		}
 	}
 
 	return indicators

@@ -95,8 +95,9 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 	// the model-gateway for semantic threat classification. Novel indicators are
 	// merged before the violation event is emitted.
 	var aiIndicators []string
+	var aiAssessment *common.AgentModelAssessment
 	if i.modelClient != nil && len(result.Violations) > 0 {
-		aiIndicators = i.modelClient.Enrich(ctx, &req, profile, result.Violations)
+		aiIndicators, aiAssessment = i.modelClient.Enrich(ctx, &req, profile, result.Violations)
 	}
 
 	if len(result.Violations) == 0 {
@@ -125,6 +126,19 @@ func (i *AgentInterceptor) handleAction(w http.ResponseWriter, r *http.Request) 
 		ConditionsMatched: result.ConditionsCount,
 		Timestamp:         time.Now(),
 		Indicators:        allViolationIndicators,
+	}
+	// Embed the Layer 0 AI assessment in event metadata so the orchestrator can
+	// perform constitutional evaluation without an additional model call.
+	if aiAssessment != nil {
+		if violationEvent.RawData == nil {
+			violationEvent.RawData = make(map[string]interface{})
+		}
+		violationEvent.RawData["ai_risk_level"] = aiAssessment.RiskLevel
+		violationEvent.RawData["ai_confidence"] = aiAssessment.Confidence
+		violationEvent.RawData["ai_summary"] = aiAssessment.Summary
+		violationEvent.RawData["ai_provider"] = aiAssessment.ProviderName
+		violationEvent.RawData["ai_recommended_action"] = aiAssessment.RecommendedAction
+		violationEvent.RawData["ai_indicators"] = aiAssessment.Indicators
 	}
 	i.publishEvent(ctx, violationEvent)
 

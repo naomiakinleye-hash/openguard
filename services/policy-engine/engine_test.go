@@ -21,8 +21,16 @@ func TestEngine_EvaluateAllow(t *testing.T) {
 	ctx := context.Background()
 
 	// "read" matches B-ALLOW-003 (read-only operations are auto-allowed).
+	// Provide a low-risk AI assessment so Layer 0 hard enforcement passes through.
+	ai := &AIAssessment{
+		RiskLevel:         "low",
+		Confidence:        0.95,
+		Summary:           "No threats detected.",
+		ProviderName:      "test-provider",
+		RecommendedAction: "allow",
+	}
 	event := map[string]interface{}{"event_id": "e1", "domain": "host"}
-	decision := e.Evaluate(ctx, event, "read")
+	decision := e.Evaluate(ctx, event, "read", ai)
 
 	if decision.Decision != DecisionAllow {
 		t.Errorf("expected allow for 'read', got %s (rationale: %s)",
@@ -36,7 +44,7 @@ func TestEngine_EvaluateDeny(t *testing.T) {
 
 	// "disable_logging" violates constitutional principle C-004 → deny.
 	event := map[string]interface{}{"event_id": "e2", "domain": "host"}
-	decision := e.Evaluate(ctx, event, "disable_logging")
+	decision := e.Evaluate(ctx, event, "disable_logging", nil)
 
 	if decision.Decision != DecisionDeny {
 		t.Errorf("expected deny for disable_logging, got %s", decision.Decision)
@@ -48,8 +56,16 @@ func TestEngine_EvaluateRequireApproval(t *testing.T) {
 	ctx := context.Background()
 
 	// "process_terminate" matches B-APPROVE-004 → require_approval.
+	// Provide a medium-risk AI assessment so Layer 0 escalates but does not block.
+	ai := &AIAssessment{
+		RiskLevel:         "medium",
+		Confidence:        0.80,
+		Summary:           "Process termination warrants human review.",
+		ProviderName:      "test-provider",
+		RecommendedAction: "escalate",
+	}
 	event := map[string]interface{}{"event_id": "e3", "domain": "host"}
-	decision := e.Evaluate(ctx, event, "process_terminate")
+	decision := e.Evaluate(ctx, event, "process_terminate", ai)
 
 	if decision.Decision != DecisionRequireApproval {
 		t.Errorf("expected require_approval for process_terminate, got %s (rationale: %s)",
@@ -63,7 +79,7 @@ func TestEngine_DefaultDeny(t *testing.T) {
 
 	// An unknown action hits the fail-safe deny default (C-007).
 	event := map[string]interface{}{"event_id": "e4", "domain": "host"}
-	decision := e.Evaluate(ctx, event, "completely_unknown_action_xyz")
+	decision := e.Evaluate(ctx, event, "completely_unknown_action_xyz", nil)
 
 	if decision.Decision != DecisionDeny {
 		t.Errorf("expected deny for unknown action, got %s", decision.Decision)
