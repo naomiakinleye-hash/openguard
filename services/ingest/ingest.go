@@ -177,9 +177,9 @@ func (s *Service) validate(event map[string]interface{}) error {
 
 	// Enum: domain
 	domain, _ := event["domain"].(string)
-	validDomains := map[string]bool{"host": true, "comms": true, "agent": true, "model": true}
+	validDomains := map[string]bool{"host": true, "comms": true, "agent": true, "model": true, "network": true}
 	if !validDomains[domain] {
-		return fmt.Errorf("invalid domain: %q (must be one of: host, comms, agent, model)", domain)
+		return fmt.Errorf("invalid domain: %q (must be one of: host, comms, agent, model, network)", domain)
 	}
 
 	// Enum: severity
