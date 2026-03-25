@@ -151,29 +151,85 @@ func (s *Service) Ingest(ctx context.Context, rawPayload []byte) error {
 	return nil
 }
 
-// validate performs basic schema validation on the event.
-// In production this should use a full JSON Schema validator.
+// validate performs schema-driven validation on the event.
+// When the schema is loaded it uses the schema's required field list; otherwise
+// it falls back to the hardcoded minimum required set.
+// Type and enum constraints are always enforced for core fields.
 func (s *Service) validate(event map[string]interface{}) error {
+	// Derive required fields from the loaded schema or use the hardcoded baseline.
 	required := []string{"event_id", "timestamp", "source", "domain", "severity", "risk_score", "tier", "actor", "target", "human_approved", "audit_hash"}
+	if s.schema != nil {
+		if schemaRequired, ok := s.schema["required"].([]interface{}); ok && len(schemaRequired) > 0 {
+			required = make([]string, 0, len(schemaRequired))
+			for _, f := range schemaRequired {
+				if fs, ok := f.(string); ok {
+					required = append(required, fs)
+				}
+			}
+		}
+	}
 	for _, field := range required {
 		if _, ok := event[field]; !ok {
 			return fmt.Errorf("missing required field: %s", field)
 		}
 	}
+
+	// Enum: domain
 	domain, _ := event["domain"].(string)
 	validDomains := map[string]bool{"host": true, "comms": true, "agent": true, "model": true}
 	if !validDomains[domain] {
-		return fmt.Errorf("invalid domain: %s", domain)
+		return fmt.Errorf("invalid domain: %q (must be one of: host, comms, agent, model)", domain)
 	}
+
+	// Enum: severity
+	if sev, ok := event["severity"].(string); ok {
+		validSeverities := map[string]bool{"info": true, "low": true, "medium": true, "high": true, "critical": true}
+		if !validSeverities[sev] {
+			return fmt.Errorf("invalid severity: %q", sev)
+		}
+	}
+
+	// Enum: tier
+	if tier, ok := event["tier"].(string); ok {
+		validTiers := map[string]bool{"T0": true, "T1": true, "T2": true, "T3": true, "T4": true}
+		if !validTiers[tier] {
+			return fmt.Errorf("invalid tier: %q (must be T0–T4)", tier)
+		}
+	}
+
+	// Type: risk_score must be a number.
+	switch event["risk_score"].(type) {
+	case float64, int, int64:
+		// valid
+	default:
+		return fmt.Errorf("risk_score must be a number, got %T", event["risk_score"])
+	}
+
 	return nil
 }
 
 // deadLetter routes an invalid payload to the dead letter topic.
+// If a NATS connection is available the payload is published with a reason header;
+// otherwise the error is logged for offline inspection.
 func (s *Service) deadLetter(_ context.Context, payload []byte, reason string) {
 	s.logger.Warn("ingest: dead letter",
 		zap.String("reason", reason),
 		zap.Int("payload_bytes", len(payload)),
 	)
+	if s.nc == nil || s.cfg.DeadLetterTopic == "" {
+		return
+	}
+	msg := &nats.Msg{
+		Subject: s.cfg.DeadLetterTopic,
+		Data:    payload,
+		Header:  nats.Header{"X-DLQ-Reason": []string{reason}},
+	}
+	if err := s.nc.PublishMsg(msg); err != nil {
+		s.logger.Warn("ingest: dead letter publish failed",
+			zap.String("topic", s.cfg.DeadLetterTopic),
+			zap.Error(err),
+		)
+	}
 }
 
 // loadSchema reads the JSON schema file into memory.

@@ -104,14 +104,40 @@ func (s *Service) Detect(ctx context.Context, event map[string]interface{}) (*De
 // HandleEvent implements the ingest.EventHandler interface so the detection
 // service can be wired directly into the ingest pipeline.
 func (s *Service) HandleEvent(ctx context.Context, event map[string]interface{}) error {
+	// Preserve the adapter's calibrated risk score before running the pipeline.
+	// Adapter scores are domain-specific and authoritative for their indicator set
+	// (e.g. phishing=75, credential_harvesting=92). The detect service is additive —
+	// it enriches with asset criticality and threat intel but must never decrease
+	// a score that was already computed from known indicators.
+	adapterRisk, _ := event["risk_score"].(float64)
+
 	result, err := s.Detect(ctx, event)
 	if err != nil {
 		return fmt.Errorf("detect: handle event: %w", err)
 	}
-	// Enrich the event in place with detection results.
-	event["risk_score"] = result.RiskScore
-	event["tier"] = result.Tier
-	event["severity"] = result.Severity
+
+	// Take the higher of adapter-assigned and detect-computed scores so that
+	// well-calibrated adapter signals are never silently downgraded.
+	finalScore := math.Max(adapterRisk, result.RiskScore)
+	finalTier := assignTier(finalScore)
+	finalSeverity := tierToSeverity(finalTier)
+
+	if finalScore != result.RiskScore {
+		s.logger.Info("detect: adapter score preserved",
+			zap.String("event_id", result.EventID),
+			zap.Float64("adapter_score", adapterRisk),
+			zap.Float64("detect_score", result.RiskScore),
+			zap.Float64("final_score", finalScore),
+			zap.String("tier", finalTier),
+			zap.String("severity", finalSeverity),
+		)
+	}
+
+	// Enrich the event in place with final detection results.
+	event["risk_score"] = finalScore
+	event["tier"] = finalTier
+	event["severity"] = finalSeverity
+
 	// Forward enriched event to the sink if configured.
 	if s.cfg.Sink != nil {
 		s.cfg.Sink.Add(event)
@@ -130,6 +156,8 @@ func (s *Service) scoreComponents(event map[string]interface{}) RiskComponents {
 		c.AnomalyScore = 15
 	case "host":
 		c.AnomalyScore = 10
+	case "comms":
+		c.AnomalyScore = 8
 	default:
 		c.AnomalyScore = 5
 	}

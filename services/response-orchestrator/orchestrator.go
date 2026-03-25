@@ -4,8 +4,11 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -38,6 +41,9 @@ type Config struct {
 	ApprovalTimeout time.Duration
 	// IncidentSink receives new incidents when human approval is requested.
 	IncidentSink IncidentSink
+	// AlertWebhookURL is an optional incoming webhook URL (Slack, Teams, PagerDuty, etc.)
+	// for T1+ alert dispatch. If empty, alerts are logged only.
+	AlertWebhookURL string
 }
 
 // ApprovalRequest represents a pending human approval request.
@@ -78,10 +84,16 @@ func NewOrchestrator(cfg Config, pe *policyengine.Engine, ledger *auditled.Ledge
 }
 
 // Dispatch processes a detected event through the policy engine and executes
-// the tier-appropriate response.
+// the tier-appropriate response. The proposedAction is automatically selected
+// from the event's domain and tier when the caller passes an empty string.
 func (o *Orchestrator) Dispatch(ctx context.Context, event map[string]interface{}, proposedAction string) error {
 	eventID, _ := event["event_id"].(string)
 	tier, _ := event["tier"].(string)
+
+	// Auto-select a domain-appropriate proposed action when none is specified.
+	if proposedAction == "" {
+		proposedAction = selectAction(event)
+	}
 
 	// Policy evaluation (always deterministic — no model calls).
 	decision := o.policyEngine.Evaluate(ctx, event, proposedAction)
@@ -228,9 +240,56 @@ func (o *Orchestrator) respond(incidentID string, approved bool) error {
 	return nil
 }
 
-// sendAlert emits an alert notification for a T1 event.
+// sendAlert emits an alert notification for a T1+ event.
+// If AlertWebhookURL is configured the alert is delivered as an HTTP POST
+// (compatible with Slack incoming webhooks, Teams connectors, PagerDuty Events API v2, etc.).
+// Falls back to structured logging when no webhook is configured.
 func (o *Orchestrator) sendAlert(eventID, target string) {
-	o.logger.Info("orchestrator: alert sent", zap.String("event_id", eventID), zap.String("target", target))
+	o.logger.Info("orchestrator: alert dispatched",
+		zap.String("event_id", eventID),
+		zap.String("target", target),
+	)
+
+	if o.cfg.AlertWebhookURL == "" {
+		return
+	}
+
+	payload, err := json.Marshal(map[string]interface{}{
+		"text":     fmt.Sprintf("[OpenGuard] Security alert — event %s requires attention on %s", eventID, target),
+		"event_id": eventID,
+		"target":   target,
+		"ts":       time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		o.logger.Error("orchestrator: marshal alert payload failed", zap.Error(err))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.AlertWebhookURL, bytes.NewReader(payload))
+	if err != nil {
+		o.logger.Error("orchestrator: create alert request failed", zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		o.logger.Error("orchestrator: alert webhook delivery failed", zap.Error(err))
+		return
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode >= 300 {
+		o.logger.Warn("orchestrator: alert webhook returned non-2xx",
+			zap.Int("status", resp.StatusCode),
+			zap.String("event_id", eventID),
+		)
+		return
+	}
+	o.logger.Info("orchestrator: alert webhook delivered", zap.String("event_id", eventID))
 }
 
 // executeContainment performs T3 containment actions.
@@ -246,6 +305,8 @@ func (o *Orchestrator) executeContainment(ctx context.Context, eventID, action s
 	if err := o.ledger.Append(ctx, entry); err != nil {
 		o.logger.Warn("orchestrator: audit append failed", zap.Error(err))
 	}
+	// Dispatch a T1 alert so the security team is notified of containment.
+	o.sendAlert(eventID, "security-team")
 }
 
 // executeEmergencyLockdown performs T4 emergency lockdown.
@@ -260,4 +321,25 @@ func (o *Orchestrator) executeEmergencyLockdown(ctx context.Context, eventID str
 	if err := o.ledger.Append(ctx, entry); err != nil {
 		o.logger.Warn("orchestrator: audit append failed", zap.Error(err))
 	}
+	o.sendAlert(eventID, "ciso")
+}
+
+// selectAction derives a domain-and-tier-appropriate proposed action from the event.
+// This eliminates the need for callers to hard-code "auto_monitor" for every event
+// and ensures that higher-severity comms events propose meaningful actions.
+func selectAction(event map[string]interface{}) string {
+	tier, _ := event["tier"].(string)
+	domain, _ := event["domain"].(string)
+
+	if domain == "comms" {
+		switch tier {
+		case "T3", "T4":
+			return "block_sender"
+		case "T2":
+			return "quarantine_message"
+		case "T1":
+			return "alert_security_team"
+		}
+	}
+	return "auto_monitor"
 }

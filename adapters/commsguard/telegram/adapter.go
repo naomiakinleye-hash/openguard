@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,22 +21,26 @@ import (
 
 // TelegramAdapter implements common.Sensor for the Telegram Bot API.
 type TelegramAdapter struct {
-	botToken  string
-	publisher *common.Publisher
-	analyzer  *common.ThreatAnalyzer
-	logger    *zap.Logger
+	botToken      string
+	webhookSecret string // set during webhook.setWebhook(); validated via X-Telegram-Bot-Api-Secret-Token
+	publisher     *common.Publisher
+	analyzer      *common.ThreatAnalyzer
+	logger        *zap.Logger
 
 	mu      sync.Mutex
 	running bool
 }
 
 // NewTelegramAdapter constructs a new TelegramAdapter.
-func NewTelegramAdapter(botToken string, publisher *common.Publisher, analyzer *common.ThreatAnalyzer, logger *zap.Logger) *TelegramAdapter {
+// webhookSecret is the secret_token configured during webhook registration; leave empty to skip
+// header validation (acceptable in dev mode with allowlisted source IPs).
+func NewTelegramAdapter(botToken, webhookSecret string, publisher *common.Publisher, analyzer *common.ThreatAnalyzer, logger *zap.Logger) *TelegramAdapter {
 	return &TelegramAdapter{
-		botToken:  botToken,
-		publisher: publisher,
-		analyzer:  analyzer,
-		logger:    logger,
+		botToken:      botToken,
+		webhookSecret: webhookSecret,
+		publisher:     publisher,
+		analyzer:      analyzer,
+		logger:        logger,
 	}
 }
 
@@ -215,16 +218,19 @@ func (a *TelegramAdapter) checkTelegramPatterns(update map[string]interface{}, e
 	return indicators
 }
 
-// verifySecretToken verifies the Telegram webhook secret token using HMAC-SHA256.
-func (a *TelegramAdapter) verifySecretToken(body []byte, token string) error {
-	if token == "" {
-		return nil // no token provided
+// verifySecretToken validates the X-Telegram-Bot-Api-Secret-Token header.
+// Telegram echoes back the exact secret_token string set during webhook registration;
+// validation is a constant-time equality check — not an HMAC computation.
+func (a *TelegramAdapter) verifySecretToken(_ []byte, token string) error {
+	if a.webhookSecret == "" {
+		return nil // validation disabled — acceptable when source IP is allowlisted
 	}
-	mac := hmac.New(sha256.New, []byte(a.botToken))
-	mac.Write(body) //nolint:errcheck
-	_ = mac.Sum(nil)
-	// The Telegram X-Telegram-Bot-Api-Secret-Token is a plain string set during
-	// webhook registration, not an HMAC. We just validate it's non-empty here.
+	if token == "" {
+		return fmt.Errorf("telegram: missing X-Telegram-Bot-Api-Secret-Token header")
+	}
+	if !hmac.Equal([]byte(token), []byte(a.webhookSecret)) {
+		return fmt.Errorf("telegram: invalid webhook secret token")
+	}
 	return nil
 }
 

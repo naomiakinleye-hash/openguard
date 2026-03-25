@@ -85,7 +85,7 @@ func NewCommsGuardSensor(cfg common.Config, logger *zap.Logger) (*CommsGuardSens
 	}
 
 	if cfg.TelegramBotToken != "" {
-		s.telegram = telegram.NewTelegramAdapter(cfg.TelegramBotToken, publisher, analyzer, logger)
+		s.telegram = telegram.NewTelegramAdapter(cfg.TelegramBotToken, cfg.TelegramWebhookSecret, publisher, analyzer, logger)
 		s.mux.Handle("/telegram/webhook", s.telegram)
 		logger.Info("commsguard: telegram adapter enabled")
 	}

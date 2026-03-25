@@ -33,6 +33,7 @@ type Config struct {
 	WhatsAppAppSecret    string
 	WhatsAppVerifyToken  string
 	TelegramBotToken     string
+	TelegramWebhookSecret string // optional: validated against X-Telegram-Bot-Api-Secret-Token header
 	MessengerAppSecret   string
 	MessengerVerifyToken string
 	TwilioAuthToken      string

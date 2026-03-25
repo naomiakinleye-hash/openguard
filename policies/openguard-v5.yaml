@@ -77,6 +77,27 @@ require_approval:
     action: require_approval
     policy_ref: C-003
 
+  - id: B-APPROVE-COMMS-001
+    description: Quarantining a message from any channel requires operator approval before execution
+    conditions:
+      - operation: quarantine_message
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-COMMS-002
+    description: Blocking a sender across communication channels requires operator approval
+    conditions:
+      - operation: block_sender
+    action: require_approval
+    policy_ref: C-003
+
+  - id: B-APPROVE-COMMS-003
+    description: Revoking a user session or channel access requires operator approval
+    conditions:
+      - operation: revoke_channel_access
+    action: require_approval
+    policy_ref: C-003
+
 auto_allow:
   - id: B-ALLOW-001
     description: Signed template communications to allowlisted recipients are auto-allowed
@@ -101,5 +122,19 @@ auto_allow:
     conditions:
       - operation: read
       - data_classification: ["public", "internal"]
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-004
+    description: Routine auto-monitoring of inbound communications is auto-allowed; it is non-destructive telemetry collection
+    conditions:
+      - operation: auto_monitor
+    action: allow
+    policy_ref: C-006
+
+  - id: B-ALLOW-005
+    description: Dispatching security alerts to configured channels is always permitted
+    conditions:
+      - operation: alert_security_team
     action: allow
     policy_ref: C-006

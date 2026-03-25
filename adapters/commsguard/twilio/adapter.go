@@ -124,6 +124,14 @@ func (a *TwilioAdapter) HandleVoice(w http.ResponseWriter, r *http.Request) {
 	params := urlValuesToMap(r.PostForm)
 	event := a.normalizeVoice(params)
 
+	// Run threat analysis on voice metadata (caller ID, destination, bulk call patterns).
+	// Voice events have no body text, but bulk/toll-fraud indicators are metadata-driven.
+	indicators := a.analyzer.Analyze(event)
+	if len(indicators) > 0 {
+		event.Indicators = append(event.Indicators, indicators...)
+		event.EventType = promoteEventType(event.EventType, indicators)
+	}
+
 	if err := a.publisher.Publish(r.Context(), event); err != nil {
 		a.logger.Error("twilio: publish Voice failed", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)

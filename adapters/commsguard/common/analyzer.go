@@ -129,17 +129,13 @@ func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 		indicators = append(indicators, "social_engineering")
 	}
 
-	// Check for data exfiltration patterns.
+	// Check for data exfiltration patterns (also catches malware attachments by extension).
 	dataExfilIndicators := checkDataExfiltration(event)
 	indicators = append(indicators, dataExfilIndicators...)
 
 	// Check for spam (repeated identical or near-identical content).
 	spamIndicators := a.checkSpam(event)
 	indicators = append(indicators, spamIndicators...)
-
-	// Check for malware attachments (suspicious file extensions).
-	malwareIndicators := checkMalwareAttachment(event)
-	indicators = append(indicators, malwareIndicators...)
 
 	return indicators
 }
