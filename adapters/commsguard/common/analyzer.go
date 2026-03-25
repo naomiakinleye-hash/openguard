@@ -27,13 +27,64 @@ var urlShorteners = []string{"bit.ly", "t.co", "tinyurl.com", "goo.gl", "ow.ly",
 
 // phishingKeywords are urgency/action phrases commonly found in phishing messages.
 var phishingKeywords = []string{
+	// Account / login urgency
 	"verify your account",
 	"click here",
+	"click the link",
 	"confirm your identity",
 	"your account will be suspended",
 	"login immediately",
 	"urgent action required",
 	"account verification required",
+	// Reward / prize / lottery scams
+	"claim your reward",
+	"claim your prize",
+	"claim your winnings",
+	"you have won",
+	"you've won",
+	"you were selected",
+	"you have been selected",
+	"congratulations you",
+	"lottery winner",
+	"prize winner",
+	"selected winner",
+	"unclaimed prize",
+	"unclaimed reward",
+	"collect your reward",
+	"collect your prize",
+	"you are a winner",
+	// Financial lure phrases
+	"million dollar",
+	"1 million",
+	"$1,000,000",
+	"wire transfer",
+	"send us your",
+	"send your details",
+}
+
+// rewardScamKeywords are prize/lottery/reward phrases that signal a scam
+// even without a URL present (the link often comes in a follow-up message).
+var rewardScamKeywords = []string{
+	"claim your reward",
+	"claim your prize",
+	"claim your winnings",
+	"you have won",
+	"you've won",
+	"you were selected",
+	"you have been selected",
+	"congratulations you",
+	"lottery winner",
+	"prize winner",
+	"selected winner",
+	"unclaimed prize",
+	"unclaimed reward",
+	"collect your reward",
+	"collect your prize",
+	"you are a winner",
+	"1million",
+	"1 million",
+	"million reward",
+	"million prize",
 }
 
 // credentialKeywords are terms associated with credential harvesting.
@@ -114,8 +165,16 @@ func (a *ThreatAnalyzer) Analyze(event *CommsEvent) []string {
 	suspLinkIndicators := checkSuspiciousLinks(urls)
 	indicators = append(indicators, suspLinkIndicators...)
 
-	// Check for phishing patterns (urgency keywords + URL).
-	if hasURL && containsAnyPhishingKeyword(content) {
+	// Check for phishing patterns:
+	//  - With a URL:  any phishing keyword suffices (classic click-bait pattern)
+	//  - Without URL: reward/prize/lottery scam phrases are flagged immediately
+	//    because the URL arrives in a follow-up message after victim engagement.
+	if containsAnyPhishingKeyword(content) {
+		if hasURL || containsAnyRewardScamKeyword(content) {
+			indicators = append(indicators, "phishing")
+		}
+	} else if containsAnyRewardScamKeyword(content) {
+		// Reward scam with no generic phishing keyword still deserves a flag.
 		indicators = append(indicators, "phishing")
 	}
 
@@ -287,6 +346,18 @@ func checkMalwareAttachment(event *CommsEvent) []string {
 // containsAnyPhishingKeyword returns true if content contains any phishing keyword.
 func containsAnyPhishingKeyword(content string) bool {
 	for _, kw := range phishingKeywords {
+		if strings.Contains(content, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAnyRewardScamKeyword returns true if content contains a reward/prize/lottery scam phrase.
+// These phrases are high-confidence phishing indicators even without a URL in the message,
+// because prize scam workflows deliver the malicious link only after the victim responds.
+func containsAnyRewardScamKeyword(content string) bool {
+	for _, kw := range rewardScamKeywords {
 		if strings.Contains(content, kw) {
 			return true
 		}
