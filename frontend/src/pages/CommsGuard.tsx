@@ -786,36 +786,77 @@ function WhatsAppSessionPanel() {
       {/* Intercepted messages */}
       {status?.state === 'connected' && messages.length > 0 && (
         <div>
-          <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem' }}>
-            Intercepted Messages
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#94a3b8' }}>
+              Live Feed
+            </div>
+            {messages.some(m => m.is_flagged) && (
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f87171', background: '#450a0a', border: '1px solid #7f1d1d', borderRadius: '9999px', padding: '0.1rem 0.5rem' }}>
+                ⚠️ {messages.filter(m => m.is_flagged).length} blocked
+              </span>
+            )}
           </div>
-          <div style={{ maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-            {messages.slice(0, 50).map((msg) => (
-              <div
-                key={msg.id}
-                style={{
-                  padding: '0.5rem 0.75rem',
-                  background: msg.from_me ? '#1e3a5f' : '#0f172a',
-                  borderRadius: '6px',
-                  border: `1px solid ${msg.from_me ? '#1d4ed8' : '#1e293b'}`,
-                  borderLeft: `3px solid ${msg.from_me ? '#3b82f6' : '#475569'}`,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
-                  <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>
-                    {msg.from_me ? '📤 You' : `📩 +${msg.sender}`}
-                    {msg.is_group && <span style={{ marginLeft: '0.3rem', color: '#64748b' }}>· group</span>}
-                  </span>
-                  <span style={{ fontSize: '0.65rem', color: '#475569' }}>
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
+          <div style={{ maxHeight: '380px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            {messages.slice(0, 50).map((msg) => {
+              const borderColor = msg.is_flagged ? '#dc2626' : msg.from_me ? '#3b82f6' : '#475569';
+              const bgColor     = msg.is_flagged ? '#1f0a0a' : msg.from_me ? '#1e3a5f' : '#0f172a';
+              const borderSide  = msg.is_flagged ? '#dc2626' : msg.from_me ? '#1d4ed8' : '#1e293b';
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    padding: '0.5rem 0.75rem',
+                    background: bgColor,
+                    borderRadius: '6px',
+                    border: `1px solid ${borderSide}`,
+                    borderLeft: `3px solid ${borderColor}`,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                      <span style={{ fontSize: '0.7rem', color: msg.is_flagged ? '#fca5a5' : '#94a3b8', fontWeight: 600 }}>
+                        {msg.from_me ? '📤 You' : `📩 +${msg.sender}`}
+                        {msg.is_group && <span style={{ marginLeft: '0.3rem', color: '#64748b' }}>· group</span>}
+                      </span>
+                      {msg.is_flagged && (
+                        <span style={{
+                          fontSize: '0.6rem', fontWeight: 800, padding: '0.05rem 0.4rem',
+                          borderRadius: '9999px', background: '#7f1d1d', color: '#fca5a5',
+                          border: '1px solid #dc2626', letterSpacing: '0.05em',
+                        }}>
+                          🚫 BLOCKED
+                        </span>
+                      )}
+                    </div>
+                    <span style={{ fontSize: '0.65rem', color: '#475569' }}>
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '0.8125rem', color: msg.is_flagged ? '#fca5a5' : '#e2e8f0', marginBottom: msg.is_flagged && msg.threats.length > 0 ? '0.375rem' : 0 }}>
+                    {msg.has_media && !msg.content && '📎 [media]'}
+                    {msg.content || (msg.has_media ? '' : '[no content]')}
+                  </div>
+
+                  {msg.is_flagged && msg.threats.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                      {msg.threats.map((t) => (
+                        <span
+                          key={t}
+                          style={{
+                            fontSize: '0.6rem', fontWeight: 700, padding: '0.1rem 0.4rem',
+                            borderRadius: '4px', background: '#450a0a', color: '#f87171',
+                            border: '1px solid #7f1d1d', textTransform: 'uppercase', letterSpacing: '0.04em',
+                          }}
+                        >
+                          {t.replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.8125rem', color: '#e2e8f0' }}>
-                  {msg.has_media && !msg.content && '📎 [media]'}
-                  {msg.content || (msg.has_media ? '' : '[no content]')}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
