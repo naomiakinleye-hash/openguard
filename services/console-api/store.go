@@ -3,6 +3,7 @@
 package consoleapi
 
 import (
+	"database/sql"
 	"fmt"
 	"sync"
 	"time"
@@ -19,6 +20,12 @@ type Incident struct {
 	Description string                 `json:"description,omitempty"`
 	EventID     string                 `json:"event_id,omitempty"`
 	Extra       map[string]interface{} `json:"-"`
+	// Explainability fields (populated by the orchestrator).
+	MatchedRules    []string `json:"matched_rules,omitempty"`
+	PolicyCitations []string `json:"policy_citations,omitempty"`
+	Confidence      float64  `json:"confidence,omitempty"`
+	Explanation     string   `json:"explanation,omitempty"`
+	BlastRadius     string   `json:"blast_radius,omitempty"`
 }
 
 // EventStore is an append-only, paginated in-memory store for security events.
@@ -28,12 +35,19 @@ type EventStore struct {
 	byID    map[string]map[string]interface{}
 	subs    []chan map[string]interface{}
 	counter int
+	db      *sql.DB // optional SQLite backend; nil = in-memory only
 }
 
-// NewEventStore constructs a new EventStore.
-func NewEventStore() *EventStore {
+// NewEventStore constructs a new EventStore. An optional *sql.DB enables
+// SQLite persistence; pass nothing or nil for in-memory-only mode.
+func NewEventStore(db ...*sql.DB) *EventStore {
+	var d *sql.DB
+	if len(db) > 0 {
+		d = db[0]
+	}
 	return &EventStore{
 		byID: make(map[string]map[string]interface{}),
+		db:   d,
 	}
 }
 
@@ -76,6 +90,10 @@ func (s *EventStore) Add(event map[string]interface{}) {
 	}
 	s.events = append(s.events, event)
 	s.byID[id] = event
+	// Persist to SQLite if configured (best-effort, non-blocking).
+	if s.db != nil {
+		go sqlitePersistEvent(s.db, event)
+	}
 	// Notify subscribers — non-blocking so slow readers don't stall ingest.
 	for _, ch := range s.subs {
 		select {
@@ -121,12 +139,19 @@ type IncidentStore struct {
 	incidents []*Incident
 	byID      map[string]*Incident
 	counter   int
+	db        *sql.DB // optional SQLite backend
 }
 
-// NewIncidentStore constructs a new IncidentStore.
-func NewIncidentStore() *IncidentStore {
+// NewIncidentStore constructs a new IncidentStore. An optional *sql.DB enables
+// SQLite persistence.
+func NewIncidentStore(db ...*sql.DB) *IncidentStore {
+	var d *sql.DB
+	if len(db) > 0 {
+		d = db[0]
+	}
 	return &IncidentStore{
 		byID: make(map[string]*Incident),
+		db:   d,
 	}
 }
 
@@ -144,6 +169,10 @@ func (s *IncidentStore) Add(incident *Incident) {
 	}
 	s.incidents = append(s.incidents, incident)
 	s.byID[incident.ID] = incident
+	// Persist to SQLite if configured.
+	if s.db != nil {
+		go sqlitePersistIncident(s.db, incident)
+	}
 }
 
 // List returns a paginated slice of incidents and the total count.
@@ -186,5 +215,9 @@ func (s *IncidentStore) UpdateStatus(id, status string) bool {
 		return false
 	}
 	inc.Status = status
+	// Sync status to SQLite.
+	if s.db != nil {
+		go sqliteUpdateIncidentStatus(s.db, id, status)
+	}
 	return true
 }

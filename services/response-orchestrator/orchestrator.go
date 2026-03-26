@@ -33,6 +33,21 @@ type OrchestratorIncident struct {
 	CreatedAt   string  `json:"created_at"`
 	Description string  `json:"description,omitempty"`
 	RiskScore   float64 `json:"risk_score,omitempty"`
+	// Explainability fields populated by the policy evaluation layer.
+	MatchedRules    []string `json:"matched_rules,omitempty"`
+	PolicyCitations []string `json:"policy_citations,omitempty"`
+	Confidence      float64  `json:"confidence,omitempty"`
+	Explanation     string   `json:"explanation,omitempty"`
+	BlastRadius     string   `json:"blast_radius,omitempty"`
+}
+
+// incidentEnrichment holds optional explainability data generated at dispatch time.
+type incidentEnrichment struct {
+	MatchedRules    []string
+	PolicyCitations []string
+	Confidence      float64
+	Explanation     string
+	BlastRadius     string
 }
 
 // Config holds configuration for the Orchestrator.
@@ -123,7 +138,8 @@ func (o *Orchestrator) Dispatch(ctx context.Context, event map[string]interface{
 	}
 
 	if decision.Decision == policyengine.DecisionRequireApproval {
-		return o.requestApproval(ctx, eventID, proposedAction, tier)
+		enrichment := buildEnrichment(event, decision.PolicyCitations)
+		return o.requestApproval(ctx, eventID, proposedAction, tier, enrichment)
 	}
 
 	// Policy allows — dispatch by tier.
@@ -142,7 +158,7 @@ func (o *Orchestrator) dispatchByTier(ctx context.Context, eventID, tier, action
 
 	case "T2":
 		o.logger.Info("orchestrator: T2 — requesting human approval", zap.String("event_id", eventID))
-		return o.requestApproval(ctx, eventID, action, tier)
+		return o.requestApproval(ctx, eventID, action, tier, nil)
 
 	case "T3":
 		o.logger.Warn("orchestrator: T3 — executing containment", zap.String("event_id", eventID))
@@ -155,14 +171,14 @@ func (o *Orchestrator) dispatchByTier(ctx context.Context, eventID, tier, action
 	default:
 		o.logger.Warn("orchestrator: unknown tier, defaulting to T2 handling",
 			zap.String("tier", tier), zap.String("event_id", eventID))
-		return o.requestApproval(ctx, eventID, action, tier)
+		return o.requestApproval(ctx, eventID, action, tier, nil)
 	}
 	return nil
 }
 
 // requestApproval places an action on hold and waits for operator approval.
 // If the timeout elapses without a response, the action is escalated.
-func (o *Orchestrator) requestApproval(ctx context.Context, incidentID, proposedAction, tier string) error {
+func (o *Orchestrator) requestApproval(ctx context.Context, incidentID, proposedAction, tier string, enrichment *incidentEnrichment) error {
 	ch := make(chan bool, 1)
 	req := &ApprovalRequest{
 		IncidentID:     incidentID,
@@ -177,14 +193,22 @@ func (o *Orchestrator) requestApproval(ctx context.Context, incidentID, proposed
 
 	// Notify the incident sink when approval is requested.
 	if o.cfg.IncidentSink != nil {
-		o.cfg.IncidentSink.Add(&OrchestratorIncident{
+		inc := &OrchestratorIncident{
 			ID:          incidentID,
 			EventID:     incidentID,
 			Type:        "approval_required",
 			Status:      "pending",
 			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 			Description: proposedAction,
-		})
+		}
+		if enrichment != nil {
+			inc.MatchedRules = enrichment.MatchedRules
+			inc.PolicyCitations = enrichment.PolicyCitations
+			inc.Confidence = enrichment.Confidence
+			inc.Explanation = enrichment.Explanation
+			inc.BlastRadius = enrichment.BlastRadius
+		}
+		o.cfg.IncidentSink.Add(inc)
 	}
 
 	o.logger.Info("orchestrator: approval requested",
@@ -424,4 +448,82 @@ func selectAction(event map[string]interface{}) string {
 		}
 	}
 	return "auto_monitor"
+}
+
+// buildEnrichment constructs incident explainability metadata from the event and
+// policy decision at dispatch time.
+func buildEnrichment(event map[string]interface{}, policyCitations []string) *incidentEnrichment {
+	domain, _ := event["domain"].(string)
+	eventType, _ := event["type"].(string)
+	tier, _ := event["tier"].(string)
+	host, _ := event["host"].(string)
+	agentID, _ := event["agent_id"].(string)
+	riskScore, _ := event["risk_score"].(float64)
+
+	// Extract matched_rules slice from event (may be []string or []interface{}).
+	var matchedRules []string
+	if raw, ok := event["matched_rules"]; ok {
+		switch v := raw.(type) {
+		case []string:
+			matchedRules = v
+		case []interface{}:
+			for _, r := range v {
+				if s, ok := r.(string); ok {
+					matchedRules = append(matchedRules, s)
+				}
+			}
+		}
+	}
+
+	// Estimate blast radius from event context.
+	blastRadius := estimateBlastRadius(domain, host, agentID)
+
+	// Generate a human-readable explanation.
+	explanation := fmt.Sprintf(
+		"Domain: %s | Event type: %s | Tier: %s | Risk score: %.1f. "+
+			"The policy engine evaluated this event against %d rule(s) and "+
+			"%d policy citation(s). Operator approval is required before "+
+			"the proposed automated response proceeds.",
+		domain, eventType, tier, riskScore, len(matchedRules), len(policyCitations),
+	)
+
+	confidence := 0.0
+	if riskScore > 0 {
+		confidence = riskScore / 100.0
+		if confidence > 1.0 {
+			confidence = 1.0
+		}
+	}
+
+	return &incidentEnrichment{
+		MatchedRules:    matchedRules,
+		PolicyCitations: policyCitations,
+		Confidence:      confidence,
+		Explanation:     explanation,
+		BlastRadius:     blastRadius,
+	}
+}
+
+// estimateBlastRadius returns a qualitative blast-radius description.
+func estimateBlastRadius(domain, host, agentID string) string {
+	switch domain {
+	case "agent":
+		if agentID != "" {
+			return fmt.Sprintf("agent:%s — containment scoped to single AI agent process", agentID)
+		}
+		return "all agents on host — agent runtime isolation required"
+	case "host":
+		if host != "" {
+			return fmt.Sprintf("host:%s — isolation would disrupt all services on this node", host)
+		}
+		return "single host — network isolation required"
+	case "network":
+		return "network segment — all hosts on the affected VLAN/subnet may be impacted"
+	case "comms":
+		return "communications channel — blocking may affect legitimate users on the same platform"
+	case "model":
+		return "model inference pipeline — blocking would halt all AI-assisted workflows"
+	default:
+		return "scope unknown — manual assessment required before automated response"
+	}
 }

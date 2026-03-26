@@ -70,6 +70,33 @@ var builtinAgentRules = []agentRule{
 		Responses:   []string{"block", "suspend", "alert", "audit_log"},
 		Enabled:     true,
 	},
+	{
+		ID:          "AGENT-006",
+		Name:        "Indirect Prompt Injection",
+		Description: "Injection payload detected in tool response or RAG-retrieved content rather than direct user input.",
+		Severity:    "critical",
+		Tier:        "immediate",
+		Responses:   []string{"block", "suspend", "quarantine_tool_output"},
+		Enabled:     true,
+	},
+	{
+		ID:          "AGENT-007",
+		Name:        "Memory Write Anomaly",
+		Description: "Agent performed an anomalous write to its persistent memory store outside of approved scope.",
+		Severity:    "high",
+		Tier:        "T2–T3",
+		Responses:   []string{"block", "alert", "audit_log"},
+		Enabled:     true,
+	},
+	{
+		ID:          "AGENT-008",
+		Name:        "RAG Corpus Poisoning",
+		Description: "Retrieval-augmented generation corpus may have been tampered with to influence agent responses.",
+		Severity:    "critical",
+		Tier:        "T3–immediate",
+		Responses:   []string{"block", "suspend", "quarantine_corpus", "alert"},
+		Enabled:     true,
+	},
 }
 
 // ─── Agent store ─────────────────────────────────────────────────────────────

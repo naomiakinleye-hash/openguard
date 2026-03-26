@@ -3,6 +3,7 @@ package main
 
 import (
 "context"
+"database/sql"
 "os"
 "os/signal"
 "syscall"
@@ -15,6 +16,7 @@ import (
 
 consoleapi "github.com/DiniMuhd7/openguard/services/console-api"
 auditled "github.com/DiniMuhd7/openguard/services/audit-ledger"
+"github.com/DiniMuhd7/openguard/services/baseline"
 "github.com/DiniMuhd7/openguard/services/detect"
 "github.com/DiniMuhd7/openguard/services/ingest"
 orchestrator "github.com/DiniMuhd7/openguard/services/response-orchestrator"
@@ -29,34 +31,53 @@ modelagent "github.com/DiniMuhd7/openguard/model-gateway/agent"
 
 // incidentSinkAdapter adapts consoleapi.IncidentStore to the orchestrator.IncidentSink interface.
 type incidentSinkAdapter struct {
-	store *consoleapi.IncidentStore
+	store  *consoleapi.IncidentStore
+	server *consoleapi.Server // set after API server is created
 }
 
 func (a *incidentSinkAdapter) Add(inc *orchestrator.OrchestratorIncident) {
-	a.store.Add(&consoleapi.Incident{
-		ID:          inc.ID,
-		EventID:     inc.EventID,
-		Type:        inc.Type,
-		Tier:        inc.Tier,
-		RiskScore:   inc.RiskScore,
-		Status:      inc.Status,
-		CreatedAt:   inc.CreatedAt,
-		Description: inc.Description,
-	})
+	consInc := &consoleapi.Incident{
+		ID:              inc.ID,
+		EventID:         inc.EventID,
+		Type:            inc.Type,
+		Tier:            inc.Tier,
+		RiskScore:       inc.RiskScore,
+		Status:          inc.Status,
+		CreatedAt:       inc.CreatedAt,
+		Description:     inc.Description,
+		MatchedRules:    inc.MatchedRules,
+		PolicyCitations: inc.PolicyCitations,
+		Confidence:      inc.Confidence,
+		Explanation:     inc.Explanation,
+		BlastRadius:     inc.BlastRadius,
+	}
+	a.store.Add(consInc)
+	if a.server != nil {
+		a.server.DispatchWebhooksForIncident(consInc)
+	}
 }
 
 // eventPipeline chains the detection service with the response orchestrator so
 // that every ingested event is (1) scored and stored, then (2) dispatched for
 // policy evaluation, audit logging, and tier-appropriate response.
 type eventPipeline struct {
-	detect *detect.Service
-	orch   *orchestrator.Orchestrator
+	detect    *detect.Service
+	orch      *orchestrator.Orchestrator
+	apiServer *consoleapi.Server // optional; used to feed supply-chain events
 }
 
 func (p *eventPipeline) HandleEvent(ctx context.Context, event map[string]interface{}) error {
 	// Step 1: score, enrich, and persist the event.
 	if err := p.detect.HandleEvent(ctx, event); err != nil {
 		return err
+	}
+	// Feed host process events into the supply-chain store.
+	if p.apiServer != nil {
+		if domain, _ := event["domain"].(string); domain == "host" {
+			if cmd, _ := event["command"].(string); cmd != "" {
+				p.apiServer.IngestProcessEvent(event)
+			}
+		}
 	}
 	// Step 2: dispatch to the orchestrator for policy evaluation and response.
 	// The proposed action is derived from the tier assigned by detection.
@@ -111,9 +132,35 @@ logger.Warn("audit ledger: could not open storage file", zap.Error(err))
 }
 defer ledger.Close() //nolint:errcheck
 
-// Initialize event and incident stores.
-eventStore := consoleapi.NewEventStore()
-incidentStore := consoleapi.NewIncidentStore()
+// Initialize event and incident stores (with optional SQLite persistence).
+var eventStore *consoleapi.EventStore
+var incidentStore *consoleapi.IncidentStore
+var sqliteDB *sql.DB
+if dbPath := os.Getenv("SQLITE_PATH"); dbPath != "" {
+	db, dbErr := consoleapi.OpenSQLite(dbPath, logger)
+	if dbErr != nil {
+		logger.Warn("sqlite: could not open database — running without persistence", zap.Error(dbErr))
+		eventStore = consoleapi.NewEventStore()
+		incidentStore = consoleapi.NewIncidentStore()
+	} else {
+		sqliteDB = db
+		eventStore = consoleapi.NewEventStore(db)
+		incidentStore = consoleapi.NewIncidentStore(db)
+		if loadErr := eventStore.LoadEventsFromSQLite(db); loadErr != nil {
+			logger.Warn("sqlite: failed to reload events", zap.Error(loadErr))
+		}
+		if loadErr := incidentStore.LoadIncidentsFromSQLite(db); loadErr != nil {
+			logger.Warn("sqlite: failed to reload incidents", zap.Error(loadErr))
+		}
+		logger.Info("sqlite: persistence enabled", zap.String("path", dbPath))
+	}
+} else {
+	eventStore = consoleapi.NewEventStore()
+	incidentStore = consoleapi.NewIncidentStore()
+}
+
+// Initialize behavioural baseline engine.
+baselineEngine := baseline.NewEngine(0.1)
 
 // Initialize policy engine.
 pe, err := policyengine.NewEngine(policyengine.Config{
@@ -125,14 +172,16 @@ logger.Fatal("failed to initialize policy engine", zap.Error(err))
 
 // Initialize detection service.
 detectSvc := detect.NewService(detect.Config{
-RulesDir: getEnv("RULES_DIR", "./rules"),
-Sink:     eventStore,
+	RulesDir: getEnv("RULES_DIR", "./rules"),
+	Sink:     eventStore,
+	Baseline: baselineEngine,
 }, logger)
 
 // Initialize response orchestrator.
+sinkAdapter := &incidentSinkAdapter{store: incidentStore}
 orch := orchestrator.NewOrchestrator(orchestrator.Config{
-ApprovalTimeout: 30 * time.Minute,
-IncidentSink:    &incidentSinkAdapter{store: incidentStore},
+	ApprovalTimeout: 30 * time.Minute,
+	IncidentSink:    sinkAdapter,
 }, pe, ledger, logger)
 
 // Wire detection + orchestration into a single pipeline handler.
@@ -153,6 +202,12 @@ ListenAddr: listenAddr,
 JWTSecret:  getEnv("JWT_SECRET", "change-me-in-production"),
 NATSUrl:    natsURL,
 }, ledger, eventStore, incidentStore, logger)
+apiServer.SetBaselineEngine(baselineEngine)
+apiServer.SetDB(sqliteDB)
+
+// Wire back-references now that apiServer is available.
+sinkAdapter.server = apiServer
+pipeline.apiServer = apiServer
 
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()

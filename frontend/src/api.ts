@@ -106,6 +106,13 @@ export interface Incident {
   status?: string;
   created_at?: string;
   description?: string;
+  event_id?: string;
+  // Explainability fields
+  matched_rules?: string[];
+  policy_citations?: string[];
+  confidence?: number;
+  explanation?: string;
+  blast_radius?: string;
   [key: string]: unknown;
 }
 
@@ -142,22 +149,6 @@ export interface SensorInfo {
 
 export interface SensorsResponse {
   sensors: SensorInfo[];
-}
-
-export interface ModelProvider {
-  id: string;
-  name: string;
-  available: boolean;    // true = user has connected this provider
-  uses_oauth: boolean;   // true = OAuth2 sign-in flow; false = API key entry form
-}
-
-export interface ModelsResponse {
-  active: string;
-  providers: ModelProvider[];
-}
-
-export interface SetActiveModelResponse {
-  active: string;
 }
 
 export interface SystemStats {
@@ -576,6 +567,65 @@ export interface StatusResponse {
   [key: string]: unknown;
 }
 
+// ─── RBAC user types ─────────────────────────────────────────────────────────
+
+export interface UserRecord {
+  username: string;
+  role: 'viewer' | 'analyst' | 'operator' | 'admin';
+  created_at?: string;
+}
+
+// ─── Webhook types ───────────────────────────────────────────────────────────
+
+export interface WebhookConfig {
+  id: string;
+  name: string;
+  url: string;
+  min_tier: number;
+  format: 'slack' | 'pagerduty' | 'generic';
+  enabled: boolean;
+  created_at?: string;
+}
+
+// ─── Supply-chain types ───────────────────────────────────────────────────────
+
+export interface SupplyChainEvent {
+  id: string;
+  timestamp: string;
+  host: string;
+  installer: string;
+  package_name: string;
+  version?: string;
+  risk_score: number;
+  risk_label: string;
+  flags?: string[];
+}
+
+export interface SupplyChainResponse {
+  events: SupplyChainEvent[];
+  page: number;
+  total: number;
+  high_risk: number;
+  installers: Record<string, number>;
+}
+
+export interface SupplyChainStats {
+  total: number;
+  high_risk: number;
+  installers: Record<string, number>;
+}
+
+// ─── Baseline types ───────────────────────────────────────────────────────────
+
+export interface BaselineEntityStats {
+  key: string;
+  mean: number;
+  std_dev: number;
+  sample_count: number;
+  last_update: string;
+}
+
+
 export interface RuleOverride {
   enabled: boolean;
   severity?: string;
@@ -684,15 +734,6 @@ export const api = {
   incidentAction: (id: string, action: 'approve' | 'deny' | 'override') =>
     post<ActionResponse>(`/api/v1/incidents/${encodeURIComponent(id)}/${action}`),
   sensors: () => get<SensorsResponse>('/api/v1/sensors'),
-  models: () => get<ModelsResponse>('/api/v1/models'),
-  setActiveModel: (provider: string) =>
-    postJSON<SetActiveModelResponse>('/api/v1/models/active', { provider }),
-  oauthStart: (provider: string) =>
-    get<{ auth_url: string }>(`/api/v1/models/oauth/start?provider=${encodeURIComponent(provider)}`),
-  saveCredential: (provider: string, credential: string) =>
-    postJSON<{ status: string; provider: string }>('/api/v1/models/credentials', { provider, credential }),
-  deleteCredential: (provider: string) =>
-    del<{ status: string; provider: string }>(`/api/v1/models/credentials?provider=${encodeURIComponent(provider)}`),
   systemStats: () => get<SystemStats>('/api/v1/system/stats'),
   summary: (body: SummaryRequest) => postJSON<SummaryResponse>('/api/v1/summary', body),
   login: (username: string, password: string) =>
@@ -814,4 +855,38 @@ export const api = {
     putJSON<StatusResponse>(`/api/v1/config/policies/${encodeURIComponent(id)}`, rule),
   deletePolicy: (id: string) =>
     del<StatusResponse>(`/api/v1/config/policies/${encodeURIComponent(id)}`),
+
+  // Account management
+  updateAccount: (currentPassword: string, newUsername: string, newPassword: string) =>
+    putJSON<{ username: string }>('/api/v1/account', {
+      current_password: currentPassword,
+      new_username: newUsername,
+      new_password: newPassword,
+    }),
+
+  // ── User management (admin only) ───────────────────────────────────────────
+  listUsers: () => get<{ users: UserRecord[] }>('/api/v1/users'),
+  createUser: (username: string, password: string, role: string) =>
+    postJSON<{ username: string }>('/api/v1/users', { username, password, role }),
+  updateUser: (username: string, data: { role?: string; new_password?: string }) =>
+    putJSON<{ username: string }>(`/api/v1/users/${encodeURIComponent(username)}`, data),
+  deleteUser: (username: string) =>
+    del<StatusResponse>(`/api/v1/users/${encodeURIComponent(username)}`),
+
+  // ── Webhook configuration (operator+) ──────────────────────────────────────
+  listWebhooks: () => get<{ webhooks: WebhookConfig[] }>('/api/v1/config/webhooks'),
+  createWebhook: (wh: Omit<WebhookConfig, 'id' | 'created_at'>) =>
+    postJSON<WebhookConfig>('/api/v1/config/webhooks', wh),
+  updateWebhook: (id: string, wh: Partial<WebhookConfig>) =>
+    putJSON<WebhookConfig>(`/api/v1/config/webhooks/${encodeURIComponent(id)}`, wh),
+  deleteWebhook: (id: string) =>
+    del<StatusResponse>(`/api/v1/config/webhooks/${encodeURIComponent(id)}`),
+
+  // ── Supply Chain Guard ──────────────────────────────────────────────────────
+  supplyChain: (page?: number) =>
+    get<SupplyChainResponse>(`/api/v1/supplychain${page ? `?page=${page}` : ''}`),
+  supplyChainStats: () => get<SupplyChainStats>('/api/v1/supplychain/stats'),
+
+  // ── Baseline analytics ──────────────────────────────────────────────────────
+  baselineStats: () => get<{ entities: BaselineEntityStats[] }>('/api/v1/baseline'),
 };

@@ -1,0 +1,61 @@
+id: AGENT-008
+name: rag-content-poisoning
+version: "1.0"
+domain: agent
+description: >
+  Detects RAG (Retrieval Augmented Generation) content poisoning — adversaries
+  inject malicious text into the documents or knowledge base ingested by the
+  agent's retrieval pipeline. When a victim agent later retrieves that content,
+  it may execute the embedded instructions, effectively compromising the agent
+  without direct access to its prompt.
+
+conditions:
+  - id: COND-001
+    description: Retrieved RAG chunk has anomalously high injection signal density
+    field: agent.rag_injection_score
+    operator: greater_than
+    value: 0.6
+
+  - id: COND-002
+    description: RAG source document was not in the approved corpus at ingestion time
+    field: agent.rag_source_verified
+    operator: equals
+    value: "false"
+
+  - id: COND-003
+    description: RAG chunk contains known jailbreak marker patterns
+    field: agent.rag_content
+    operator: contains_any
+    value:
+      - "IGNORE ALL PREVIOUS INSTRUCTIONS"
+      - "SYSTEM OVERRIDE:"
+      - "<!-- injection -->"
+      - "[INST]"
+      - "<SYSTEM>"
+      - "∞ loop prevention disabled"
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: medium
+    tier: T2
+  - conditions_matched: 2
+    severity: high
+    tier: T3
+  - conditions_matched: 3
+    severity: critical
+    tier: immediate
+
+response:
+  T2:
+    - action: flag_rag_chunk
+    - action: request_approval
+  T3:
+    - action: quarantine_rag_source
+    - action: alert
+      target: security-team
+  immediate:
+    - action: quarantine_rag_source
+    - action: suspend_agent
+    - action: trigger_corpus_audit
+    - action: alert
+      target: security-team

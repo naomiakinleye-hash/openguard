@@ -1,0 +1,61 @@
+id: AGENT-007
+name: memory-write-anomaly
+version: "1.0"
+domain: agent
+description: >
+  Detects suspicious write operations to an agent's persistent memory store
+  (vector database, RAG index, or key-value cache). Malicious actors may
+  plant instructions in the memory layer that surface later in unrelated
+  sessions — a form of stored cross-session prompt injection.
+
+conditions:
+  - id: COND-001
+    description: Agent writes to memory store in an unapproved context
+    field: agent.memory_operation
+    operator: equals
+    value: "write"
+
+  - id: COND-002
+    description: Memory write originates from an untrusted source
+    field: agent.memory_source
+    operator: not_in
+    value:
+      - "trusted_pipeline"
+      - "operator_approved"
+      - "signed_document"
+
+  - id: COND-003
+    description: Memory write content contains injection-style patterns
+    field: agent.memory_content
+    operator: contains_any
+    value:
+      - "ignore previous"
+      - "new instruction"
+      - "system prompt"
+      - "act as"
+      - "you are now"
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: medium
+    tier: T2
+  - conditions_matched: 2
+    severity: high
+    tier: T3
+  - conditions_matched: 3
+    severity: critical
+    tier: immediate
+
+response:
+  T2:
+    - action: hold_memory_write
+    - action: request_approval
+  T3:
+    - action: block_memory_write
+    - action: alert
+      target: security-team
+  immediate:
+    - action: block_memory_write
+    - action: suspend_agent
+    - action: alert
+      target: security-team

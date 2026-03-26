@@ -1,0 +1,55 @@
+id: AGENT-006
+name: indirect-prompt-injection
+version: "1.0"
+domain: agent
+description: >
+  Detects indirect prompt injection delivered via tool responses, retrieved
+  documents, or API output that attempts to hijack the agent's behaviour
+  without appearing in the original user prompt. Unlike AGENT-004 (which
+  inspects user-supplied input), this rule targets the tool_response and
+  rag_content fields populated by the agent's external tool calls.
+
+conditions:
+  - id: COND-001
+    description: Tool response contains instruction-override payload
+    field: agent.tool_response
+    operator: contains_any
+    value:
+      - "ignore previous instructions"
+      - "disregard all prior"
+      - "new system prompt"
+      - "you are now"
+      - "forget your instructions"
+      - "override: "
+      - "[system]"
+      - "<|im_start|>system"
+      - "###new task"
+      - "act as if"
+      - "your new role is"
+      - "execute the following"
+
+  - id: COND-002
+    description: RAG retrieved content contains jailbreak payload
+    field: agent.rag_content
+    operator: contains_any
+    value:
+      - "ignore previous instructions"
+      - "disregard all prior"
+      - "new system prompt"
+      - "you are now"
+      - "override: "
+      - "[system]"
+      - "<|im_start|>system"
+
+severity_mapping:
+  - conditions_matched: 1
+    severity: critical
+    tier: immediate
+
+response:
+  immediate:
+    - action: block_action
+    - action: suspend_agent
+    - action: quarantine_tool_output
+    - action: alert
+      target: security-team

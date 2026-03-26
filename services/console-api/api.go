@@ -5,6 +5,7 @@ package consoleapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	auditled "github.com/DiniMuhd7/openguard/services/audit-ledger"
+	"github.com/DiniMuhd7/openguard/services/baseline"
 )
 
 // contextKey is a typed key for values stored in request contexts.
@@ -63,8 +65,19 @@ type Server struct {
 	requestsTotal   *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
 
-	// credentials: username → bcrypt hash
-	credentials map[string][]byte
+	// db is the optional SQLite database for user persistence. Nil when SQLite is disabled.
+	db *sql.DB
+
+	// usersMu protects the users map.
+	usersMu sync.RWMutex
+	// users: username → userRecord (role, bcrypt hash, metadata).
+	users map[string]*userRecord
+	// whStore holds outbound webhook configurations.
+	whStore *webhookStore
+	// scStore holds detected supply-chain events.
+	scStore *scStore
+	// baselineEngine performs behavioural anomaly scoring; may be nil.
+	baselineEngine *baseline.Engine
 
 	// activeProvider holds the currently selected AI model provider.
 	activeProvider atomic.Value
@@ -127,15 +140,22 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		adminUser = "admin"
 	}
 	adminHash := os.Getenv("OPENGUARD_ADMIN_BCRYPT_HASH")
-	var hashBytes []byte
+	var adminHashBytes []byte
 	if adminHash != "" {
-		hashBytes = []byte(adminHash)
+		adminHashBytes = []byte(adminHash)
 	} else {
 		// Default: bcrypt of "changeme"
 		h, _ := bcrypt.GenerateFromPassword([]byte("changeme"), bcrypt.DefaultCost)
-		hashBytes = h
+		adminHashBytes = h
 	}
-	creds := map[string][]byte{adminUser: hashBytes}
+	users := map[string]*userRecord{
+		adminUser: {
+			Username:     adminUser,
+			PasswordHash: adminHashBytes,
+			Role:         RoleAdmin,
+			CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		},
+	}
 
 	// Determine the initial active provider from env, defaulting to openai-codex.
 	// Set OPENGUARD_PROVIDER to override the default at startup (e.g. "anthropic-claude").
@@ -153,7 +173,9 @@ func NewServer(cfg Config, ledger *auditled.Ledger, events *EventStore, incident
 		registry:         reg,
 		requestsTotal:    reqTotal,
 		requestDuration:  reqDuration,
-		credentials:      creds,
+		users:            users,
+		whStore:          newWebhookStore(),
+		scStore:          newSCStore(),
 		commsConfig:      newCommsConfig(),
 		agentGuardStore:  newAgentStore(),
 		modelGuard:       newModelGuardState(),
@@ -208,6 +230,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Login endpoint is registered directly on the mux — it is exempt from JWT auth.
 	mux.HandleFunc("/api/v1/login", s.handleLogin)
+	mux.HandleFunc("/api/v1/account", s.handleAccount)
 
 	s.registerRoutes(mux)
 
@@ -306,6 +329,22 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Unified per-domain configuration CRUD endpoints.
 	mux.HandleFunc("/api/v1/config/", s.handleConfigPrefix)
 
+	// Webhook configuration (operator+ role required). Must be registered before
+	// the generic /api/v1/config/ subtree so the more-specific path wins.
+	mux.HandleFunc("/api/v1/config/webhooks", s.requireRole(RoleOperator, s.handleWebhooks))
+	mux.HandleFunc("/api/v1/config/webhooks/", s.requireRole(RoleOperator, s.handleWebhooks))
+
+	// User management (admin role required).
+	mux.HandleFunc("/api/v1/users", s.requireRole(RoleAdmin, s.handleUsers))
+	mux.HandleFunc("/api/v1/users/", s.requireRole(RoleAdmin, s.handleUsers))
+
+	// Supply-chain guard telemetry.
+	mux.HandleFunc("/api/v1/supplychain", s.handleSupplyChain)
+	mux.HandleFunc("/api/v1/supplychain/stats", s.handleSupplyChainStats)
+
+	// Behavioural baseline statistics.
+	mux.HandleFunc("/api/v1/baseline", s.handleBaseline)
+
 	// Incident detail and action endpoints — matched by prefix.
 	mux.HandleFunc("/api/v1/incidents/", s.handleIncidentActions)
 
@@ -347,14 +386,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
 		return
 	}
-	hash, ok := s.credentials[req.Username]
-	if !ok || bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil {
+	s.usersMu.RLock()
+	u, ok := s.users[req.Username]
+	s.usersMu.RUnlock()
+	if !ok || bcrypt.CompareHashAndPassword(u.PasswordHash, []byte(req.Password)) != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
 	claims := jwtv5.MapClaims{
-		"sub": req.Username,
-		"exp": jwtv5.NewNumericDate(time.Now().Add(8 * time.Hour)),
+		"sub":  req.Username,
+		"role": string(u.Role),
+		"exp":  jwtv5.NewNumericDate(time.Now().Add(8 * time.Hour)),
 	}
 	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(s.cfg.JWTSecret))
@@ -364,6 +406,87 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": signed})
+}
+
+// handleAccount handles PUT /api/v1/account — authenticated endpoint that lets
+// the current user change their username and/or password.
+func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// The actor comes from the JWT claim set by authMiddleware.
+	currentUser, _ := r.Context().Value(contextKeyActor).(string)
+	if currentUser == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewUsername     string `json:"new_username"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.CurrentPassword == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "current_password is required"})
+		return
+	}
+	if req.NewUsername == "" && req.NewPassword == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "new_username or new_password is required"})
+		return
+	}
+
+	s.usersMu.Lock()
+	defer s.usersMu.Unlock()
+
+	record, ok := s.users[currentUser]
+	if !ok || bcrypt.CompareHashAndPassword(record.PasswordHash, []byte(req.CurrentPassword)) != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "current password is incorrect"})
+		return
+	}
+
+	newUser := req.NewUsername
+	if newUser == "" {
+		newUser = currentUser
+	}
+	// Reject if the new username is already taken by a different account.
+	if newUser != currentUser {
+		if _, exists := s.users[newUser]; exists {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "username already taken"})
+			return
+		}
+	}
+
+	// Update password if requested.
+	if req.NewPassword != "" {
+		newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			s.logger.Error("console api: bcrypt failed", zap.Error(err))
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		record.PasswordHash = newHash
+	}
+
+	// Rename if requested: move record to new key.
+	if newUser != currentUser {
+		delete(s.users, currentUser)
+		record.Username = newUser
+		s.users[newUser] = record
+		go sqliteDeleteUser(s.db, currentUser)
+	}
+	go sqliteUpsertUser(s.db, record)
+
+	s.logger.Info("console api: account updated",
+		zap.String("actor", currentUser),
+		zap.String("new_username", newUser),
+		zap.Bool("password_changed", req.NewPassword != ""),
+	)
+	writeJSON(w, http.StatusOK, map[string]string{"username": newUser})
 }
 
 // handleHealth responds to GET /health with a 200 OK.
@@ -857,7 +980,7 @@ func (s *Server) handleModelsActive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -909,7 +1032,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		subject, _ := claims.GetSubject()
+		role, _ := claims["role"].(string)
 		ctx := context.WithValue(r.Context(), contextKeyActor, subject)
+		ctx = context.WithValue(ctx, contextKeyRole, UserRole(role))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -932,6 +1057,51 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			zap.String("remote_addr", r.RemoteAddr),
 		)
 	})
+}
+
+// handleBaseline handles GET /api/v1/baseline — returns current behavioural
+// baseline statistics from the EWMA engine.
+func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.baselineEngine == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"entities": []interface{}{}})
+		return
+	}
+	stats := s.baselineEngine.Stats()
+	writeJSON(w, http.StatusOK, map[string]interface{}{"entities": stats})
+}
+
+// SetBaselineEngine wires the behavioural baseline engine into the console API
+// server after construction (called from main.go).
+func (s *Server) SetBaselineEngine(e *baseline.Engine) {
+	s.baselineEngine = e
+}
+
+// SetDB enables SQLite user persistence. It loads previously persisted users
+// from the database; if none exist (fresh DB) it seeds the database with the
+// current in-memory users (the default admin account).
+func (s *Server) SetDB(db *sql.DB) {
+	s.db = db
+	users, err := LoadUsersFromSQLite(db)
+	if err != nil || len(users) == 0 {
+		// Seed the DB with the current in-memory defaults.
+		s.usersMu.RLock()
+		for _, u := range s.users {
+			sqliteUpsertUser(db, u)
+		}
+		s.usersMu.RUnlock()
+		return
+	}
+	// Replace the in-memory map with what was persisted.
+	s.usersMu.Lock()
+	s.users = make(map[string]*userRecord, len(users))
+	for _, u := range users {
+		s.users[u.Username] = u
+	}
+	s.usersMu.Unlock()
 }
 
 // writeJSON writes a JSON response with the given status code.

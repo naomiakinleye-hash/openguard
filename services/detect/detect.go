@@ -7,8 +7,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"go.uber.org/zap"
+
+	"github.com/DiniMuhd7/openguard/services/baseline"
 )
 
 // EventSink receives detected events for persistence.
@@ -25,6 +28,9 @@ type Config struct {
 	ModelAssistThreshold float64
 	// Sink is an optional EventSink that receives detected events for persistence.
 	Sink EventSink
+	// Baseline is an optional behavioural baseline engine; when set, drift scores
+	// are added to the anomaly component of the risk score.
+	Baseline *baseline.Engine
 }
 
 // RiskComponents holds the four components of the composite risk score.
@@ -137,6 +143,21 @@ func (s *Service) HandleEvent(ctx context.Context, event map[string]interface{})
 	event["risk_score"] = finalScore
 	event["tier"] = finalTier
 	event["severity"] = finalSeverity
+	event["matched_rules"] = result.MatchedRules
+
+	// Record host metrics in the baseline engine for drift detection.
+	if s.cfg.Baseline != nil {
+		if host, _ := event["host"].(string); host != "" {
+			if meta, ok := event["metadata"].(map[string]interface{}); ok {
+				if cpu, ok := meta["cpu_percent"].(float64); ok {
+					s.cfg.Baseline.Record("host", host, "cpu_percent", cpu)
+				}
+				if mem, ok := meta["memory_mb"].(float64); ok {
+					s.cfg.Baseline.Record("host", host, "memory_mb", mem)
+				}
+			}
+		}
+	}
 
 	// Forward enriched event to the sink if configured.
 	if s.cfg.Sink != nil {
@@ -145,13 +166,33 @@ func (s *Service) HandleEvent(ctx context.Context, event map[string]interface{})
 	return nil
 }
 
+// injectionPatterns are substrings that indicate prompt injection attempts
+// in an agent's tool responses or RAG-retrieved content.
+var injectionPatterns = []string{
+	"ignore previous instructions",
+	"disregard your instructions",
+	"new system prompt",
+	"override your policy",
+	"your real instructions are",
+	"forget everything above",
+	"act as if you are",
+	"you are now",
+	"<!--",
+	"<script",
+	"]}; // injection",
+}
+
 // scoreComponents derives risk score components from the event payload.
 // In production these are driven by loaded rule files and threat intelligence feeds.
 func (s *Service) scoreComponents(event map[string]interface{}) RiskComponents {
 	var c RiskComponents
+	var matchedRules []string
+
+	domain, _ := event["domain"].(string)
+	eventType, _ := event["type"].(string)
 
 	// Anomaly: elevate if domain is agent or model.
-	switch event["domain"] {
+	switch domain {
 	case "agent", "model":
 		c.AnomalyScore = 15
 	case "host", "network":
@@ -160,6 +201,68 @@ func (s *Service) scoreComponents(event map[string]interface{}) RiskComponents {
 		c.AnomalyScore = 8
 	default:
 		c.AnomalyScore = 5
+	}
+
+	// AGENT-006: Indirect prompt injection via tool_response or rag_content.
+	if domain == "agent" {
+		for _, field := range []string{"tool_response", "rag_content"} {
+			if val, ok := event[field].(string); ok && val != "" {
+				lower := strings.ToLower(val)
+				for _, pat := range injectionPatterns {
+					if strings.Contains(lower, pat) {
+						c.AnomalyScore = math.Max(c.AnomalyScore, 25)
+						matchedRules = append(matchedRules, "AGENT-006")
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// AGENT-007: Anomalous memory write operations.
+	if domain == "agent" {
+		if memOp, ok := event["memory_operation"].(string); ok && memOp == "write" {
+			c.AnomalyScore += 12
+			matchedRules = append(matchedRules, "AGENT-007")
+		}
+	}
+
+	// AGENT-008: RAG content poisoning indicator.
+	if domain == "agent" && strings.Contains(eventType, "rag_poison") {
+		c.AnomalyScore = math.Max(c.AnomalyScore, 22)
+		matchedRules = append(matchedRules, "AGENT-008")
+	}
+
+	// HOST-SC: Supply chain / package manager invocation.
+	if domain == "host" {
+		cmd, _ := event["command"].(string)
+		for _, pm := range []string{"npm ", "pip ", "pip3 ", "go get", "go install", "apt install", "brew install", "cargo install", "yarn add"} {
+			if strings.Contains(strings.ToLower(cmd), pm) {
+				c.AnomalyScore += 8
+				matchedRules = append(matchedRules, "HOST-SC-001")
+				break
+			}
+		}
+	}
+
+	// Baseline drift scoring.
+	if s.cfg.Baseline != nil {
+		if host, _ := event["host"].(string); host != "" {
+			if meta, ok := event["metadata"].(map[string]interface{}); ok {
+				if cpu, ok := meta["cpu_percent"].(float64); ok {
+					drift := s.cfg.Baseline.DriftScore("host", host, "cpu_percent", cpu)
+					if drift > 0 {
+						c.AnomalyScore = math.Min(c.AnomalyScore+drift, 25)
+						matchedRules = append(matchedRules, "BASELINE-CPU-DRIFT")
+					}
+				}
+			}
+		}
+	}
+
+	// Store matched rules in the event for enrichment.
+	if len(matchedRules) > 0 {
+		event["matched_rules"] = matchedRules
 	}
 
 	// Policy violation: use existing risk_score as a hint if present.
