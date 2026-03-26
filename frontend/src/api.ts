@@ -702,6 +702,20 @@ export interface CommsGuardConfigResponse {
   channels: Record<string, CommsChannelConfigEntry>;
 }
 
+export interface KPITierStat { tier: string; count: number }
+export interface KPIRiskBand { label: string; count: number }
+export interface KPIIncidentStatus { status: string; count: number }
+export interface KPIGuardThreats { guard: string; count: number; color: string }
+export interface KPIStats {
+  total_events: number;
+  total_incidents: number;
+  tier_breakdown: KPITierStat[];
+  risk_breakdown: KPIRiskBand[];
+  incident_statuses: KPIIncidentStatus[];
+  guard_threats: KPIGuardThreats[];
+  computed_at: string;
+}
+
 export interface PolicyRule {
   id: string;
   description: string;
@@ -889,4 +903,7 @@ export const api = {
 
   // ── Baseline analytics ──────────────────────────────────────────────────────
   baselineStats: () => get<{ entities: BaselineEntityStats[] }>('/api/v1/baseline'),
+
+  // ── Aggregated KPI stats (full-store sweep) ─────────────────────────────────
+  kpiStats: () => get<KPIStats>('/api/v1/stats/kpi'),
 };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type HostStatsResponse, type AgentStatsResponse, type ModelGuardStatsResponse, type CommsStatsResponse, type NetStatsResponse } from '../api';
+import { api, type HealthResponse, type EventsResponse, type IncidentsResponse, type Event, type SystemStats, type HostStatsResponse, type AgentStatsResponse, type ModelGuardStatsResponse, type NetStatsResponse, type KPIStats } from '../api';
 import { useInterval } from '../hooks/useInterval';
 import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
@@ -35,16 +35,16 @@ export default function Dashboard() {
   const [hostStats, setHostStats] = useState<HostStatsResponse | null>(null);
   const [agentStats, setAgentStats] = useState<AgentStatsResponse | null>(null);
   const [modelStats, setModelStats] = useState<ModelGuardStatsResponse | null>(null);
-  const [commsStats, setCommsStats] = useState<CommsStatsResponse | null>(null);
   const [netStats, setNetStats] = useState<NetStatsResponse | null>(null);
+  const [kpiStats, setKpiStats] = useState<KPIStats | null>(null);
 
   const fetchAll = useCallback(() => {
     // Guard module stats — fire-and-forget so they don't block the main load
     api.hostGuardStats().then(setHostStats).catch(() => {});
     api.agentStats().then(setAgentStats).catch(() => {});
     api.modelGuardStats().then(setModelStats).catch(() => {});
-    api.commsStats().then(setCommsStats).catch(() => {});
     api.networkGuardStats().then(setNetStats).catch(() => {});
+    api.kpiStats().then(setKpiStats).catch(() => {});
 
     Promise.all([api.health(), api.events(), api.incidents(), api.systemStats()])
       .then(([h, e, i, s]) => {
@@ -286,15 +286,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── KPI Charts ───────────────────────────────────────────────── */}
-      <KPICharts
-        events={events}
-        incidents={incidents}
-        hostStats={hostStats}
-        agentStats={agentStats}
-        modelStats={modelStats}
-        commsStats={commsStats}
-        netStats={netStats}
-      />
+      <KPICharts kpi={kpiStats} />
 
       {/* ── CPU & Memory utilisation row ─────────────────────────────── */}
       <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>

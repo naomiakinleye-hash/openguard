@@ -296,6 +296,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/models/oauth/callback", s.handleOAuthCallback)
 	mux.HandleFunc("/api/v1/models/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/v1/system/stats", s.handleSystemStats)
+	mux.HandleFunc("/api/v1/stats/kpi", s.handleKPIStats)
 	mux.HandleFunc("/api/v1/summary", s.handleSummary)
 
 	// CommsGuard-specific endpoints.

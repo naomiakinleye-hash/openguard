@@ -1,21 +1,7 @@
-import type {
-  EventsResponse,
-  IncidentsResponse,
-  HostStatsResponse,
-  AgentStatsResponse,
-  ModelGuardStatsResponse,
-  CommsStatsResponse,
-  NetStatsResponse,
-} from '../api';
+import type { KPIStats } from '../api';
 
 interface KPIChartsProps {
-  events: EventsResponse | null;
-  incidents: IncidentsResponse | null;
-  hostStats: HostStatsResponse | null;
-  agentStats: AgentStatsResponse | null;
-  modelStats: ModelGuardStatsResponse | null;
-  commsStats: CommsStatsResponse | null;
-  netStats: NetStatsResponse | null;
+  kpi: KPIStats | null;
 }
 
 // ── SVG Donut Chart ─────────────────────────────────────────────────────────
@@ -159,59 +145,55 @@ function parseTierNum(t: unknown): number | undefined {
   }
   return undefined;
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+void parseTierNum; // kept for potential future use
+
+const TIER_COLORS: Record<string, string> = {
+  T0: '#334155', T1: '#1d4ed8', T2: '#d97706', T3: '#ea580c', T4: '#dc2626',
+};
+const RISK_COLORS = ['#16a34a', '#d97706', '#ea580c', '#dc2626'];
+const INCIDENT_COLORS: Record<string, string> = {
+  pending: '#d97706', approved: '#16a34a', denied: '#dc2626', overridden: '#94a3b8',
+};
 
 // ── KPICharts ───────────────────────────────────────────────────────────────
-export default function KPICharts({
-  events,
-  incidents,
-  hostStats,
-  agentStats,
-  modelStats,
-  commsStats,
-  netStats,
-}: KPIChartsProps) {
-  // Tier distribution (T0–T4)
-  const TIER_COLORS: Record<number, string> = {
-    0: '#334155', 1: '#1d4ed8', 2: '#d97706', 3: '#ea580c', 4: '#dc2626',
-  };
-  const tierSegments: DonutSegment[] = [0, 1, 2, 3, 4].map((tier) => ({
-    label: `T${tier}`,
-    value: events?.events.filter((e) => parseTierNum(e.tier) === tier).length ?? 0,
-    color: TIER_COLORS[tier],
+export default function KPICharts({ kpi }: KPIChartsProps) {
+  // Tier distribution — sourced from full EventStore sweep on the backend.
+  const tierSegments: DonutSegment[] = (kpi?.tier_breakdown ?? []).map((t) => ({
+    label: t.tier,
+    value: t.count,
+    color: TIER_COLORS[t.tier] ?? '#334155',
   }));
 
-  // Risk score distribution (4 bands)
-  const riskBars: BarDatum[] = [
-    { label: '0–25',   color: '#16a34a', value: 0 },
-    { label: '26–50',  color: '#d97706', value: 0 },
-    { label: '51–75',  color: '#ea580c', value: 0 },
-    { label: '76–100', color: '#dc2626', value: 0 },
-  ];
-  const RISK_RANGES = [[0, 25], [26, 50], [51, 75], [76, 100]] as const;
-  for (const ev of events?.events ?? []) {
-    const s = ev.risk_score as number | undefined;
-    if (s === undefined) continue;
-    for (let i = 0; i < RISK_RANGES.length; i++) {
-      if (s >= RISK_RANGES[i][0] && s <= RISK_RANGES[i][1]) { riskBars[i].value++; break; }
-    }
-  }
+  // Risk score distribution — full-store backend aggregation.
+  const riskBars: BarDatum[] = (kpi?.risk_breakdown ?? []).map((b, i) => ({
+    label: b.label,
+    value: b.count,
+    color: RISK_COLORS[i] ?? '#64748b',
+  }));
 
-  // Incident status
-  const incidentSegments: DonutSegment[] = [
-    { label: 'Pending',  color: '#d97706', value: incidents?.incidents.filter((i) => i.status === 'pending').length  ?? 0 },
-    { label: 'Approved', color: '#16a34a', value: incidents?.incidents.filter((i) => i.status === 'approved').length ?? 0 },
-    { label: 'Denied',   color: '#dc2626', value: incidents?.incidents.filter((i) => i.status === 'denied').length   ?? 0 },
-  ];
-  const totalIncidents = incidents?.total ?? 0;
+  // Incident status — full IncidentStore sweep.
+  const incidentSegments: DonutSegment[] = (kpi?.incident_statuses ?? [])
+    .filter((s) => s.count > 0)
+    .map((s) => ({
+      label: s.status.charAt(0).toUpperCase() + s.status.slice(1),
+      value: s.count,
+      color: INCIDENT_COLORS[s.status] ?? '#64748b',
+    }));
+  const totalIncidents = kpi?.total_incidents ?? 0;
 
-  // Threats detected per guard
-  const guardBars: BarDatum[] = [
-    { label: '🖥️ Host',  color: '#ea580c', value: hostStats?.threat_events    ?? 0 },
-    { label: '🤖 Agent', color: '#7c3aed', value: agentStats?.total_threats   ?? 0 },
-    { label: '💬 Comms', color: '#0891b2', value: commsStats?.total_threats   ?? 0 },
-    { label: '🌐 Net',   color: '#22c55e', value: netStats?.threat_events     ?? 0 },
-    { label: '🧠 Model', color: '#2563eb', value: modelStats?.blocked_calls   ?? 0 },
-  ];
+  // Threats per guard — derived server-side from each domain's real data.
+  const GUARD_ICON: Record<string, string> = {
+    HostGuard: '🖥️', AgentGuard: '🤖', CommsGuard: '💬', NetworkGuard: '🌐', ModelGuard: '🧠',
+  };
+  const guardBars: BarDatum[] = (kpi?.guard_threats ?? []).map((g) => ({
+    label: `${GUARD_ICON[g.guard] ?? ''} ${g.guard.replace('Guard', '')}`,
+    value: g.count,
+    color: g.color,
+  }));
+
+  // Total event count label for the tier donut centre.
+  const totalEvents = kpi?.total_events ?? 0;
 
   const sectionTitle: React.CSSProperties = {
     fontSize: '0.75rem',
@@ -230,6 +212,11 @@ export default function KPICharts({
         <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '0.9375rem' }}>
           OpenGuard Key Performance Indicators
         </span>
+        {kpi && (
+          <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', color: '#475569' }}>
+            {totalEvents.toLocaleString()} events · {totalIncidents} incidents
+          </span>
+        )}
         <span style={{
           marginLeft: 'auto',
           fontSize: '0.7rem', color: '#475569',
@@ -239,39 +226,43 @@ export default function KPICharts({
         </span>
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: '2rem 2.5rem',
-        alignItems: 'start',
-      }}>
-        {/* 1 — Tier Distribution */}
-        <div>
-          <div style={sectionTitle}>Tier Distribution</div>
-          <DonutChart segments={tierSegments} centerLabel="Events" />
-        </div>
+      {!kpi ? (
+        <div style={{ color: '#475569', fontSize: '0.875rem' }}>Loading KPI data…</div>
+      ) : (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '2rem 2.5rem',
+          alignItems: 'start',
+        }}>
+          {/* 1 — Tier Distribution */}
+          <div>
+            <div style={sectionTitle}>Tier Distribution</div>
+            <DonutChart segments={tierSegments} centerLabel={`${totalEvents.toLocaleString()} Events`} />
+          </div>
 
-        {/* 2 — Risk Score Distribution */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={sectionTitle}>Risk Score Distribution</div>
-          <VerticalBars bars={riskBars} />
-        </div>
+          {/* 2 — Risk Score Distribution */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={sectionTitle}>Risk Score Distribution</div>
+            <VerticalBars bars={riskBars} />
+          </div>
 
-        {/* 3 — Incident Status */}
-        <div>
-          <div style={sectionTitle}>Incident Status</div>
-          <DonutChart
-            segments={incidentSegments}
-            centerLabel={`of ${totalIncidents}`}
-          />
-        </div>
+          {/* 3 — Incident Status */}
+          <div>
+            <div style={sectionTitle}>Incident Status</div>
+            <DonutChart
+              segments={incidentSegments}
+              centerLabel={`${totalIncidents} Total`}
+            />
+          </div>
 
-        {/* 4 — Threats by Guard */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={sectionTitle}>Threats by Guard</div>
-          <HorizontalBars bars={guardBars} />
+          {/* 4 — Threats by Guard */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={sectionTitle}>Threats by Guard</div>
+            <HorizontalBars bars={guardBars} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
