@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -247,9 +248,14 @@ func (s *Server) Start(ctx context.Context) error {
 		WriteTimeout: s.cfg.WriteTimeout,
 	}
 
+	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("console api: listen on %s: %w", s.cfg.ListenAddr, err)
+	}
+
 	go func() {
 		s.logger.Info("console api: listening", zap.String("addr", s.cfg.ListenAddr))
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("console api: server error", zap.Error(err))
 		}
 	}()
@@ -897,7 +903,7 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 type modelProvider struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Available bool   `json:"available"` // true when the user has connected this provider
+	Available bool   `json:"available"`  // true when the user has connected this provider
 	UsesOAuth bool   `json:"uses_oauth"` // true when sign-in uses OAuth2 (false = API key form)
 }
 

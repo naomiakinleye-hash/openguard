@@ -2,7 +2,9 @@ package consoleapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -159,12 +161,12 @@ func TestHandleHealth(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var resp map[string]string
+	var resp map[string]interface{}
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("parse response: %v", err)
 	}
 	if resp["status"] != "ok" {
-		t.Errorf("expected status=ok, got %q", resp["status"])
+		t.Errorf("expected status=ok, got %v", resp["status"])
 	}
 }
 
@@ -325,5 +327,23 @@ func TestStatusCodeLogging(t *testing.T) {
 	inner.WriteHeader(http.StatusNotFound)
 	if inner.status != http.StatusNotFound {
 		t.Errorf("expected captured status=404, got %d", inner.status)
+	}
+}
+
+func TestStart_ReturnsErrorWhenPortInUse(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen on ephemeral port: %v", err)
+	}
+	defer ln.Close()
+
+	s := newTestServer(t)
+	s.cfg.ListenAddr = ln.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := s.Start(ctx); err == nil {
+		t.Fatal("expected Start to fail when the port is already in use")
 	}
 }
