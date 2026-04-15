@@ -1,6 +1,6 @@
 # OpenGuard v5
 
-**OpenGuard v5** is a constitutional, policy-governed defensive platform agent. It monitors endpoint/system behaviour and communication channels, detects unauthorized and malicious activity, constrains and supervises AI agent behaviour, and keeps humans in control for all high-impact decisions.
+**OpenGuard v5** is a constitutional, policy-governed and defensive guardrail platform. It monitors endpoint/system behaviour and communication channels, detects unauthorized and malicious activity, constrains and supervises AI agent behaviour, and keeps humans in control for all high-impact decisions.
 
 ---
 
