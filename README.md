@@ -93,4 +93,4 @@ openguard/
 
 ## License
 
-Proprietary — DSHub Ltd. All rights reserved.
+DSHub Ltd. All rights reserved.
