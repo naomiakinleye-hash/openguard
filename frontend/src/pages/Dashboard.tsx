@@ -6,6 +6,8 @@ import { useSSE } from '../hooks/useSSE';
 import MiniBarChart from '../components/MiniBarChart';
 import CPUGauge from '../components/CPUGauge';
 import KPICharts from '../components/KPICharts';
+import VulnerabilityTrends from '../components/VulnerabilityTrends';
+import ThreatAlertsPanel from '../components/ThreatAlertsPanel';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 
@@ -287,6 +289,8 @@ export default function Dashboard() {
 
       {/* ── KPI Charts ───────────────────────────────────────────────── */}
       <KPICharts kpi={kpiStats} />
+      <VulnerabilityTrends />
+<ThreatAlertsPanel incidents={incidents?.incidents ?? null} loading={!incidents} />
 
       {/* ── CPU & Memory utilisation row ─────────────────────────────── */}
       <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
